@@ -73,6 +73,19 @@ function formatReport(result: PanicHypeResult, msgCount: number, dateLabel: stri
 
   lines.push(``, `⚡ 风险提示`, result.warning);
   lines.push(``, `🔄 逆向建议`, result.contrarian);
+
+  if (result.leaderboard.length > 0) {
+    lines.push(``, `🏆 鬼叫排行榜`);
+    const medals = ["🥇", "🥈", "🥉"];
+    result.leaderboard.slice(0, 10).forEach((entry, i) => {
+      const medal = medals[i] ?? `${i + 1}.`;
+      const panicStr = entry.panicCount > 0 ? `叫${entry.panicCount}次` : "";
+      const hypeStr  = entry.hypeCount  > 0 ? `炫${entry.hypeCount}次` : "";
+      const counts   = [panicStr, hypeStr].filter(Boolean).join(" ");
+      lines.push(`${medal} ${entry.username}【${entry.label}】${counts}  得分${entry.score}`);
+      lines.push(`   "${entry.topQuote}"`);
+    });
+  }
   return lines.join("\n");
 }
 

@@ -10,4 +10,4 @@ dist/
 *.log
 
 # IDE
-.claude/settings.local.json
+.claude

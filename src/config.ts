@@ -18,8 +18,9 @@ export const config = {
     // 你自己的 Telegram user ID（用于接收提醒）
     myUserId: parseInt(requireEnv("TG_MY_USER_ID")),
   },
-  anthropic: {
-    apiKey: requireEnv("ANTHROPIC_API_KEY"),
+  llm: {
+    qianwenKey: process.env.QIANWEN_API_KEY ?? "",
+    anthropicKey: process.env.ANTHROPIC_API_KEY ?? "",
   },
   keywords: {
     // 包含这些词就触发 AI 分析（不区分买卖，由 AI 判断）
