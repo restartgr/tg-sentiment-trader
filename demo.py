@@ -32,11 +32,18 @@ NEGATIVE_KEYWORDS = (
     "bear",
     "short",
     "sell",
+    "risk",
     "风险",
 )
 
+ALPHA_SENTIMENT_WORDS = {
+    keyword.lower()
+    for keyword in (*POSITIVE_KEYWORDS, *NEGATIVE_KEYWORDS)
+    if keyword.isascii() and keyword.isalpha()
+}
+
 LINE_RE = re.compile(r"^\[(?P<timestamp>[^\]]+)\]\s*(?P<user>[^:]+):\s*(?P<text>.+)$")
-TICKER_RE = re.compile(r"\$([A-Za-z]{1,6})|\b([A-Za-z]{2,6})\b|\b(\d{6})\b")
+TICKER_RE = re.compile(r"\$([A-Za-z]{1,6})|\b([A-Z]{2,6})\b|\b(\d{6})\b")
 
 
 def parse_chat_line(line: str) -> dict[str, str] | None:
@@ -70,7 +77,7 @@ def extract_tickers(text: str) -> list[str]:
         token = match.group(1) or match.group(2) or match.group(3)
         if not token:
             continue
-        if token.isalpha() and token.lower() in {"bull", "bear", "long", "short", "buy", "sell"}:
+        if token.isalpha() and token.lower() in ALPHA_SENTIMENT_WORDS:
             continue
         tickers.append(token.upper())
     return list(dict.fromkeys(tickers))

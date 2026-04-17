@@ -1,6 +1,6 @@
 import unittest
 
-from demo import analyze_messages, parse_chat_line, sentiment_score
+from demo import analyze_messages, extract_tickers, parse_chat_line, sentiment_score
 
 
 class DemoTests(unittest.TestCase):
@@ -14,6 +14,11 @@ class DemoTests(unittest.TestCase):
     def test_sentiment_score(self):
         self.assertGreater(sentiment_score("利好，上涨，buy"), 0)
         self.assertLess(sentiment_score("利空，下跌，sell"), 0)
+
+
+    def test_extract_tickers_ignores_common_words(self):
+        self.assertEqual(extract_tickers("buy now with risk"), [])
+        self.assertEqual(extract_tickers("AAPL RISK MOON buy 000001"), ["AAPL", "000001"])
 
     def test_analyze_messages(self):
         lines = [
