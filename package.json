@@ -1,0 +1,29 @@
+{
+  "name": "tg-sentiment-trader",
+  "version": "1.0.0",
+  "description": "Telegram group sentiment monitor for contrarian trading signals",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "auth": "tsx src/auth.ts",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "init-db": "tsx src/db.ts",
+    "panic": "tsx src/panic-report.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "date-fns": "^4.1.0",
+    "date-fns-tz": "^3.2.0",
+    "dotenv": "^16.4.5",
+    "input": "^1.0.1",
+    "node-cron": "^3.0.3",
+    "telegram": "^2.22.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.2"
+  }
+}

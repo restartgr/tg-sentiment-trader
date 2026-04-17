@@ -1,0 +1,13 @@
+# 敏感信息 - 绝对不提交
+.env
+session.txt
+
+# 依赖
+node_modules/
+dist/
+
+# 日志
+*.log
+
+# IDE
+.claude/settings.local.json

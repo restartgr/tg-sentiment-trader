@@ -1,0 +1,30 @@
+[
+  {
+    "nickname": "父皇",
+    "aliases": [],
+    "name": "fujikura",
+    "ticker": "5803",
+    "exchange": "东京证券交易所"
+  },
+  {
+    "nickname": "凯子",
+    "aliases": ["凯皇"],
+    "name": "铠侠",
+    "ticker": "285A",
+    "exchange": "东京证券交易所"
+  },
+  {
+    "nickname": "铁子",
+    "aliases": ["跌子"],
+    "name": "日铁矿业",
+    "ticker": "1515",
+    "exchange": "东京证券交易所"
+  },
+  {
+    "nickname": "大G",
+    "aliases": ["大g"],
+    "name": "梅赛德斯-奔驰",
+    "ticker": "MBGYY",
+    "exchange": "OTC"
+  }
+]
