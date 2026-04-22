@@ -9,7 +9,9 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "init-db": "tsx src/db.ts",
-    "panic": "tsx src/panic-report.ts"
+    "panic": "tsx src/panic-report.ts",
+    "bomb": "tsx src/bomb-report.ts",
+    "leaderboard": "tsx src/leaderboard-report.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

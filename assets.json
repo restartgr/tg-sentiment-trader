@@ -14,6 +14,13 @@
     "exchange": "东京证券交易所"
   },
   {
+    "nickname": "es",
+    "aliases": ["凯皇"],
+    "name": "三井es",
+    "ticker": "7003",
+    "exchange": "东京证券交易所"
+  },
+  {
     "nickname": "铁子",
     "aliases": ["跌子"],
     "name": "日铁矿业",
@@ -26,5 +33,19 @@
     "name": "梅赛德斯-奔驰",
     "ticker": "MBGYY",
     "exchange": "OTC"
+  },
+  {
+    "nickname": "塞子",
+    "aliases": ["赛王", "kokusai"],
+    "name": "kokusai",
+    "ticker": "6525",
+    "exchange": "东京证券交易所"
+  },
+  {
+    "nickname": "霞",
+    "aliases": [],
+    "name": "霞ヶ関キャピタル",
+    "ticker": "3498",
+    "exchange": "东京证券交易所"
   }
 ]

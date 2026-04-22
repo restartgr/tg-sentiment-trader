@@ -17,6 +17,7 @@ export const config = {
     targetUsers: requireEnv("TG_TARGET_USERS").split(",").map((s) => s.trim()),
     // 你自己的 Telegram user ID（用于接收提醒）
     myUserId: parseInt(requireEnv("TG_MY_USER_ID")),
+    bombTarget: process.env.TG_BOMB_TARGET ?? "",
   },
   llm: {
     qianwenKey: process.env.QIANWEN_API_KEY ?? "",
