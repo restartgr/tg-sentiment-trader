@@ -67,7 +67,7 @@ export const config = {
     // 简单分析：超过该情绪绝对值时，轻量总览会标记为简单分析
     simpleAnalysisMinAbsScore: parseFloatEnv("SIMPLE_ANALYSIS_MIN_ABS_SCORE", 0.6),
     // 重点监控：超过该情绪绝对值才做深度分析
-    monitorMinAbsScore: parseFloatEnv("MONITOR_MIN_ABS_SCORE", 0.7),
+    monitorMinAbsScore: parseFloatEnv("MONITOR_MIN_ABS_SCORE", 0.65),
     // 单票详细分析：只在群体情绪绝对值超过该阈值时触发
     assetDetailMinAbsScore: parseFloatEnv("ASSET_DETAIL_MIN_ABS_SCORE", 0.75),
     // 单票详细分析数量
