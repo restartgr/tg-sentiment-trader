@@ -63,7 +63,8 @@ pnpm start          # 或 pnpm dev（带热重载）
 | `TG_API_ID` / `TG_API_HASH` | Telegram API 凭证，从 https://my.telegram.org 获取 |
 | `TG_TARGET_GROUPS` | 要监控的群组，逗号分隔。推荐用 username 或数字 chat id（invite link 会过期） |
 | `TG_MY_USER_ID` | 你自己的 Telegram User ID（发消息给 @userinfobot 获取） |
-| `QIANWEN_API_KEY` / `ANTHROPIC_API_KEY` | 大模型 Key，二选一；都填则**千问优先**（qwen3-max），否则用 Claude |
+| `ANTHROPIC_API_KEY` | Anthropic API Key（必填） |
+| `MODEL_LIGHT` / `MODEL_DEEP` | 模型分层（可选）：light 跑高频轻量评分（默认 `claude-haiku-4-5`），deep 跑深度分析（默认 `claude-sonnet-4-6`） |
 | `SENTIMENT_BATCH_SIZE` | 每多少条消息分析一次（默认 20） |
 | `SIMPLE_ANALYSIS_MIN_ABS_SCORE` | 简单分析档下限（默认 0.6）：`>=` 进入深度分析但不调行情 |
 | `MONITOR_MIN_ABS_SCORE` | 监控档下限（默认 0.65）：`>=` 的深度分析会调取实时行情 |
