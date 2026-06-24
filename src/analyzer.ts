@@ -18,13 +18,20 @@ function loadAssetHints(): string {
   const demoFile = path.join(process.cwd(), "assets.demo.json");
   const file = fs.existsSync(localFile) ? localFile : demoFile;
   if (!fs.existsSync(file)) return "";
-  const assets: AssetConfig[] = JSON.parse(fs.readFileSync(file, "utf-8"));
-  return assets
-    .map((a) => {
-      const allNames = [a.nickname, ...a.aliases].join("/");
-      return `${allNames}=${a.name}/${a.ticker}/${a.exchange}`;
-    })
-    .join("、");
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+    if (!Array.isArray(parsed)) return "";
+    return (parsed as AssetConfig[])
+      .map((a) => {
+        const allNames = [a.nickname, ...a.aliases].join("/");
+        return `${allNames}=${a.name}/${a.ticker}/${a.exchange}`;
+      })
+      .join("、");
+  } catch (err) {
+    console.error(`资产提示读取失败，已跳过：${file}`, err);
+    return "";
+  }
 }
 
 // 优先用千问，其次 Anthropic
@@ -254,7 +261,6 @@ export async function analyzeBatch(
   messages: { username: string; text: string }[],
 ): Promise<BatchAnalysisResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
-  const marketContext = await buildMarketContext(messages);
   const system = `你是散户投机群的情绪分析器，同时精通全球股票、期货、加密货币的代码和俗称。
 
 深度分析一批群消息的群体情绪，重点是情绪本身，资产只作为辅助。
@@ -305,6 +311,7 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
 {"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","emotionDetail":"...","divergence":"...","crowdBehavior":"...","hotTopics":["..."],"riskWarning":"...","marketInsight":"...","topAssets":[{"nickname":"...","name":"...","ticker":"...","exchange":"..."}],"summary":"一句话总结","signal":"【跟随/反向/观望】理由+建议"}`;
 
   try {
+    const marketContext = await safeBuildMarketContext(messages);
     const raw = await chat(
       system,
       `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
@@ -355,7 +362,6 @@ export async function analyzeAssetDetail(
   messages: { username: string; text: string }[],
 ): Promise<AssetDetailAnalysis> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
-  const marketContext = await buildAssetMarketContext(asset);
   const system = `你是交易辅助分析器。针对单个热门资产，结合群聊情绪、最近新闻、斐波那契回撤和 ORB 开盘区间，输出一条独立分析。
 
 【核心要求】
@@ -383,6 +389,7 @@ risk: 1句风险提示。
 {"title":"...","mood":"...","news":"...","technical":"...","emotionSignal":"...","tradeView":"【买入/卖出/观望】...","levels":"...","risk":"..."}`;
 
   try {
+    const marketContext = await safeBuildAssetMarketContext(asset);
     const raw = await chat(
       system,
       [
@@ -423,6 +430,26 @@ risk: 1句风险提示。
       levels: "",
       risk: "数据异常，先不做交易判断。",
     };
+  }
+}
+
+async function safeBuildMarketContext(
+  messages: { text: string }[],
+): Promise<string> {
+  try {
+    return await buildMarketContext(messages);
+  } catch (err) {
+    console.error("行情上下文构建失败，已降级:", err);
+    return "行情上下文构建失败；禁止编造当前价、新闻、支撑位、压力位、目标价。";
+  }
+}
+
+async function safeBuildAssetMarketContext(asset: AssetInfo): Promise<string> {
+  try {
+    return await buildAssetMarketContext(asset);
+  } catch (err) {
+    console.error(`单票行情上下文构建失败 ${asset.nickname}(${asset.ticker}):`, err);
+    return `${asset.nickname}/${asset.name}(${asset.ticker}, ${asset.exchange})：行情上下文构建失败，禁止编造当前价、新闻、支撑位、压力位、目标价。`;
   }
 }
 

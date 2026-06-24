@@ -1,9 +1,11 @@
 import { TelegramClient } from "telegram";
 import { Api } from "telegram";
 import { StringSession } from "telegram/sessions";
+import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
-import { config } from "./config";
+
+dotenv.config();
 
 export const SESSION_FILE = path.join(process.cwd(), "session.txt");
 
@@ -22,12 +24,23 @@ export function createTelegramClient(): TelegramClient {
     throw new Error("未找到 session，请先运行: pnpm auth");
   }
 
+  const apiId = Number.parseInt(requireEnv("TG_API_ID"), 10);
+  if (Number.isNaN(apiId)) {
+    throw new Error("Invalid integer env variable: TG_API_ID");
+  }
+
   return new TelegramClient(
     new StringSession(session),
-    config.telegram.apiId,
-    config.telegram.apiHash,
+    apiId,
+    requireEnv("TG_API_HASH"),
     { connectionRetries: 5 },
   );
+}
+
+function requireEnv(key: string): string {
+  const value = process.env[key];
+  if (!value) throw new Error(`Missing required env variable: ${key}`);
+  return value;
 }
 
 export async function resolveGroup(client: TelegramClient, group: string) {

@@ -48,7 +48,14 @@ function loadAssets(): AssetConfig[] {
   const demoFile = path.join(process.cwd(), "assets.demo.json");
   const file = fs.existsSync(localFile) ? localFile : demoFile;
   if (!fs.existsSync(file)) return [];
-  return JSON.parse(fs.readFileSync(file, "utf-8")) as AssetConfig[];
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+    return Array.isArray(parsed) ? parsed as AssetConfig[] : [];
+  } catch (err) {
+    console.error(`资产映射读取失败，已跳过：${file}`, err);
+    return [];
+  }
 }
 
 function toYahooSymbol(asset: Pick<AssetConfig, "ticker" | "exchange">): string | null {
