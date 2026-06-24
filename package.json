@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc",
     "auth": "tsx src/auth.ts",
+    "list-groups": "tsx src/list-groups.ts",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "init-db": "tsx src/db.ts",
