@@ -141,10 +141,9 @@ async function main() {
       const quick = await analyzeBatchScore(buffer);
       const quickAbsScore = Math.abs(quick.score);
 
-      // 档位1（< 0.6）：仅轻量总览
       const rule = resolveTier(quickAbsScore);
 
-      // 未达简单分析档：只发轻量总览
+      // 未达最低档（默认 < 0.6）：只发轻量总览
       if (!rule) {
         console.log(
           `📎 轻量总览完成 | ${quick.label}(${quick.score.toFixed(2)}) | ${quick.comment}`,
