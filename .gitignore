@@ -1,6 +1,7 @@
 # 敏感信息 - 绝对不提交
 .env
 session.txt
+assets.json
 
 # 依赖
 node_modules/

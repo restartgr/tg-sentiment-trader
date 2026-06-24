@@ -1,50 +1,16 @@
-import { TelegramClient } from "telegram";
-import { Api } from "telegram";
-import { StringSession } from "telegram/sessions";
-import fs from "fs";
-import path from "path";
 import { config } from "./config";
 import { analyzePanicHype, PanicHypeResult } from "./analyzer";
-
-const SESSION_FILE = path.join(process.cwd(), "session.txt");
-
-// 10:00-15:30 JST = 01:00-06:30 UTC (JST = UTC+9)
-const OPEN_UTC_MIN  = 1 * 60;       // 01:00 UTC
-const CLOSE_UTC_MIN = 6 * 60 + 30;  // 06:30 UTC
-
-function inTradingHours(unixSec: number): boolean {
-  const d = new Date(unixSec * 1000);
-  const min = d.getUTCHours() * 60 + d.getUTCMinutes();
-  return min >= OPEN_UTC_MIN && min < CLOSE_UTC_MIN;
-}
-
-function todayUTCRange(): { start: number; end: number } {
-  // JST 今日 00:00 = 前一天 UTC 15:00
-  const now = new Date();
-  const jstMidnight = new Date(now);
-  jstMidnight.setUTCHours(15, 0, 0, 0);
-  // 如果当前 UTC 时间 < 15:00，说明还在昨天的 JST 日期内，再往前推一天
-  if (now.getUTCHours() < 15) {
-    jstMidnight.setUTCDate(jstMidnight.getUTCDate() - 1);
-  }
-  return { start: jstMidnight.getTime(), end: jstMidnight.getTime() + 24 * 60 * 60 * 1000 };
-}
-
-async function resolveGroup(client: TelegramClient, g: string) {
-  const inviteMatch = g.match(/(?:t\.me\/\+|t\.me\/joinchat\/)([A-Za-z0-9_-]+)/);
-  if (inviteMatch) {
-    const hash = inviteMatch[1];
-    const result = await client.invoke(new Api.messages.CheckChatInvite({ hash }));
-    if (result instanceof Api.ChatInviteAlready) return result.chat;
-    if (result instanceof Api.ChatInvite) {
-      const joined = await client.invoke(new Api.messages.ImportChatInvite({ hash }));
-      if ("chats" in joined && joined.chats.length > 0) return joined.chats[0];
-    }
-  }
-  const asNum = parseInt(g);
-  if (!isNaN(asNum)) return client.getEntity(asNum);
-  return client.getEntity(g);
-}
+import {
+  createTelegramClient,
+  fetchMessagesSince,
+  formatJSTDateLabel,
+  getSenderName,
+  inJSTTradingHours,
+  readSessionString,
+  resolveGroup,
+  sendToSavedMessages,
+  todayJSTRange,
+} from "./telegram-utils";
 
 function formatReport(result: PanicHypeResult, msgCount: number, dateLabel: string): string {
   const bar = (v: number) => "█".repeat(Math.round(v / 10)) + "░".repeat(10 - Math.round(v / 10));
@@ -78,24 +44,16 @@ function formatReport(result: PanicHypeResult, msgCount: number, dateLabel: stri
 }
 
 async function main() {
-  if (!fs.existsSync(SESSION_FILE) || !fs.readFileSync(SESSION_FILE, "utf-8").trim()) {
+  if (!readSessionString()) {
     console.error("❌ 未找到 session，请先运行: pnpm auth");
     process.exit(1);
   }
 
-  const client = new TelegramClient(
-    new StringSession(fs.readFileSync(SESSION_FILE, "utf-8").trim()),
-    config.telegram.apiId,
-    config.telegram.apiHash,
-    { connectionRetries: 5 },
-  );
-
+  const client = createTelegramClient();
   await client.connect();
 
-  const { start: dayStart } = todayUTCRange();
-  const dateLabel = new Date(dayStart + 9 * 60 * 60 * 1000).toLocaleDateString("zh-CN", {
-    year: "numeric", month: "2-digit", day: "2-digit",
-  });
+  const { start: dayStart } = todayJSTRange();
+  const dateLabel = formatJSTDateLabel(dayStart);
 
   console.log(`✅ 已连接 | 分析日期：${dateLabel}`);
   console.log(`   今日 JST 起点 UTC：${new Date(dayStart).toISOString()}`);
@@ -105,24 +63,13 @@ async function main() {
       const entity = await resolveGroup(client, g);
       console.log(`\n📡 分页拉取今日消息...`);
 
-      // Telegram API 单次最多 100 条，需要分页直到超出今日范围
-      const allMessages: Awaited<ReturnType<typeof client.getMessages>> = [];
-      let offsetId = 0;
-      while (true) {
-        const batch = await client.getMessages(entity, { limit: 100, offsetId });
-        if (batch.length === 0) break;
-        allMessages.push(...batch);
-        const oldest = batch[batch.length - 1];
-        // 超出今日 JST 起点就停止
-        if (oldest.date * 1000 < dayStart) break;
-        offsetId = oldest.id;
-      }
+      const allMessages = await fetchMessagesSince(client, entity, dayStart);
 
       // 过滤：今日 JST 范围内 + 开盘时段
       const filtered = allMessages
         .filter((m) => {
           const ts = m.date * 1000;
-          return ts >= dayStart && m.text?.trim() && inTradingHours(m.date);
+          return ts >= dayStart && m.text?.trim() && inJSTTradingHours(m.date);
         })
         .reverse();
 
@@ -136,11 +83,7 @@ async function main() {
 
       const buffer: { username: string; text: string }[] = [];
       for (const msg of filtered) {
-        const sender = await msg.getSender();
-        const name =
-          sender && "username" in sender
-            ? (sender.username ?? ("firstName" in sender ? (sender as any).firstName : "匿名"))
-            : "匿名";
+        const name = await getSenderName(msg);
         buffer.push({ username: name, text: msg.text!.trim() });
       }
 
@@ -152,7 +95,7 @@ async function main() {
       console.log(report);
       console.log("─".repeat(50));
 
-      await client.sendMessage("me", { message: report });
+      await sendToSavedMessages(client, report);
       console.log(`\n✅ 报告已发送到「已保存消息」`);
     } catch (err) {
       console.error("分析失败:", err);

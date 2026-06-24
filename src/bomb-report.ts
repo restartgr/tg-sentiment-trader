@@ -1,38 +1,17 @@
-import { TelegramClient } from "telegram";
-import { Api } from "telegram";
-import { StringSession } from "telegram/sessions";
-import fs from "fs";
-import path from "path";
 import { config } from "./config";
 import { analyzeBombUser, BombResult } from "./analyzer";
+import {
+  createTelegramClient,
+  fetchMessagesSince,
+  formatJSTDateLabel,
+  formatJSTTime,
+  readSessionString,
+  resolveGroup,
+  sendToSavedMessages,
+  todayJSTStart,
+} from "./telegram-utils";
 
-const SESSION_FILE = path.join(process.cwd(), "session.txt");
 const TARGET_USERNAME = config.telegram.bombTarget;
-
-// 今日 JST 起点（JST 00:00 = 前一天 UTC 15:00）
-function todayJSTStart(): Date {
-  const now = new Date();
-  const d = new Date(now);
-  d.setUTCHours(15, 0, 0, 0);
-  if (now.getUTCHours() < 15) d.setUTCDate(d.getUTCDate() - 1);
-  return d;
-}
-
-async function resolveGroup(client: TelegramClient, g: string) {
-  const inviteMatch = g.match(/(?:t\.me\/\+|t\.me\/joinchat\/)([A-Za-z0-9_-]+)/);
-  if (inviteMatch) {
-    const hash = inviteMatch[1];
-    const result = await client.invoke(new Api.messages.CheckChatInvite({ hash }));
-    if (result instanceof Api.ChatInviteAlready) return result.chat;
-    if (result instanceof Api.ChatInvite) {
-      const joined = await client.invoke(new Api.messages.ImportChatInvite({ hash }));
-      if ("chats" in joined && joined.chats.length > 0) return joined.chats[0];
-    }
-  }
-  const asNum = parseInt(g);
-  if (!isNaN(asNum)) return client.getEntity(asNum);
-  return client.getEntity(g);
-}
 
 function formatReport(result: BombResult, msgCount: number, dateLabel: string): string {
   const bombBar = "█".repeat(Math.round(result.bombIndex / 10)) + "░".repeat(10 - Math.round(result.bombIndex / 10));
@@ -71,24 +50,16 @@ function formatReport(result: BombResult, msgCount: number, dateLabel: string): 
 }
 
 async function main() {
-  if (!fs.existsSync(SESSION_FILE) || !fs.readFileSync(SESSION_FILE, "utf-8").trim()) {
+  if (!readSessionString()) {
     console.error("❌ 未找到 session，请先运行: pnpm auth");
     process.exit(1);
   }
 
-  const client = new TelegramClient(
-    new StringSession(fs.readFileSync(SESSION_FILE, "utf-8").trim()),
-    config.telegram.apiId,
-    config.telegram.apiHash,
-    { connectionRetries: 5 },
-  );
-
+  const client = createTelegramClient();
   await client.connect();
 
   const dayStart = todayJSTStart();
-  const dateLabel = new Date(dayStart.getTime() + 9 * 60 * 60 * 1000).toLocaleDateString("zh-CN", {
-    year: "numeric", month: "2-digit", day: "2-digit",
-  });
+  const dateLabel = formatJSTDateLabel(dayStart.getTime());
 
   console.log(`✅ 已连接 | 追踪用户：@${TARGET_USERNAME} | 日期：${dateLabel}`);
 
@@ -97,17 +68,11 @@ async function main() {
       const entity = await resolveGroup(client, g);
       console.log(`\n📡 分页拉取消息...`);
 
-      // 分页拉取今日全部消息
-      const allMessages: Awaited<ReturnType<typeof client.getMessages>> = [];
-      let offsetId = 0;
-      while (true) {
-        const batch = await client.getMessages(entity, { limit: 100, offsetId });
-        if (batch.length === 0) break;
-        allMessages.push(...batch);
-        const oldest = batch[batch.length - 1];
-        if (oldest.date * 1000 < dayStart.getTime()) break;
-        offsetId = oldest.id;
-      }
+      const allMessages = await fetchMessagesSince(
+        client,
+        entity,
+        dayStart.getTime(),
+      );
 
       // 筛选目标用户今日发言
       const userMessages: { text: string; time: string }[] = [];
@@ -121,7 +86,7 @@ async function main() {
           uname?.toLowerCase() === TARGET_USERNAME.toLowerCase() ||
           fname?.toLowerCase() === TARGET_USERNAME.toLowerCase()
         ) {
-          const t = new Date(msg.date * 1000).toLocaleTimeString("zh-CN", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" });
+          const t = formatJSTTime(msg.date);
           userMessages.push({ text: msg.text.trim(), time: t });
         }
       }
@@ -142,7 +107,7 @@ async function main() {
       console.log(report);
       console.log("─".repeat(50));
 
-      await client.sendMessage("me", { message: report });
+      await sendToSavedMessages(client, report);
       console.log(`\n✅ 报告已发送到「已保存消息」`);
     } catch (err) {
       console.error("分析失败:", err);

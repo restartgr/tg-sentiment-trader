@@ -1,0 +1,37 @@
+[
+  {
+    "nickname": "apple",
+    "aliases": ["aapl", "苹果"],
+    "name": "Apple",
+    "ticker": "AAPL",
+    "exchange": "NASDAQ"
+  },
+  {
+    "nickname": "tesla",
+    "aliases": ["tsla", "特斯拉"],
+    "name": "Tesla",
+    "ticker": "TSLA",
+    "exchange": "NASDAQ"
+  },
+  {
+    "nickname": "nvidia",
+    "aliases": ["nvda", "英伟达"],
+    "name": "NVIDIA",
+    "ticker": "NVDA",
+    "exchange": "NASDAQ"
+  },
+  {
+    "nickname": "nq",
+    "aliases": ["纳指", "纳斯达克期货"],
+    "name": "NASDAQ 100 Futures",
+    "ticker": "NQ",
+    "exchange": "CME"
+  },
+  {
+    "nickname": "toyota",
+    "aliases": ["tm", "丰田"],
+    "name": "Toyota Motor",
+    "ticker": "7203",
+    "exchange": "东京证券交易所"
+  }
+]

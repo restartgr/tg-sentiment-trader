@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
+import { buildAssetMarketContext, buildMarketContext } from "./market-data";
 
 interface AssetConfig {
   nickname: string;
@@ -13,15 +14,24 @@ interface AssetConfig {
 }
 
 function loadAssetHints(): string {
-  const file = path.join(process.cwd(), "assets.json");
+  const localFile = path.join(process.cwd(), "assets.json");
+  const demoFile = path.join(process.cwd(), "assets.demo.json");
+  const file = fs.existsSync(localFile) ? localFile : demoFile;
   if (!fs.existsSync(file)) return "";
-  const assets: AssetConfig[] = JSON.parse(fs.readFileSync(file, "utf-8"));
-  return assets
-    .map((a) => {
-      const allNames = [a.nickname, ...a.aliases].join("/");
-      return `${allNames}=${a.name}/${a.ticker}/${a.exchange}`;
-    })
-    .join("、");
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+    if (!Array.isArray(parsed)) return "";
+    return (parsed as AssetConfig[])
+      .map((a) => {
+        const allNames = [a.nickname, ...a.aliases].join("/");
+        return `${allNames}=${a.name}/${a.ticker}/${a.exchange}`;
+      })
+      .join("、");
+  } catch (err) {
+    console.error(`资产提示读取失败，已跳过：${file}`, err);
+    return "";
+  }
 }
 
 // 优先用千问，其次 Anthropic
@@ -77,17 +87,48 @@ async function chat(
 }
 
 function parseJSON(raw: string): any {
-  // 去掉 markdown 代码块
   let cleaned = raw
     .trim()
     .replace(/^```json?\n?/, "")
     .replace(/\n?```$/, "")
     .trim();
-  // 截取第一个 { 到最后一个 } 之间的内容，兼容模型在 JSON 前后加说明文字
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start !== -1 && end !== -1) cleaned = cleaned.slice(start, end + 1);
-  return JSON.parse(cleaned);
+
+  const attempts = [
+    (s: string) => s,
+    // 去掉对象/数组末尾的多余逗号 {"a":1,}  [1,2,]
+    (s: string) => s.replace(/,(\s*[}\]])/g, "$1"),
+    // 值中未转义的裸双引号 -> 单引号
+    (s: string) =>
+      s.replace(
+        /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+        (_m, open, value, close) =>
+          open + value.replace(/(?<!\\)"/g, "'") + close,
+      ),
+    // 综合：先去尾逗号再修引号
+    (s: string) =>
+      s
+        .replace(/,(\s*[}\]])/g, "$1")
+        .replace(
+          /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+          (_m, open, value, close) =>
+            open + value.replace(/(?<!\\)"/g, "'") + close,
+        ),
+  ];
+
+  let lastErr: unknown;
+  for (const fix of attempts) {
+    try {
+      return JSON.parse(fix(cleaned));
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  // 全部失败：打印 raw 便于排查
+  console.error("parseJSON 失败，原始内容：\n", cleaned);
+  throw lastErr;
 }
 
 export interface SentimentResult {
@@ -128,18 +169,92 @@ export async function analyzeSentiment(
 }
 
 export interface AssetInfo {
-  nickname: string; // 群里的叫法，如"大G"、"凯子"
-  name: string; // 正式名称，如"奔驰"、"特斯拉"
-  ticker: string; // 代码，如"MBGYY"、"TSLA"、"600519"
+  nickname: string; // 群里的叫法，如"苹果"、"特斯拉"
+  name: string; // 正式名称，如"Apple"、"Tesla"
+  ticker: string; // 代码，如"AAPL"、"TSLA"、"7203"
   exchange: string; // 交易所，如"NYSE"、"NASDAQ"、"上交所"、"期货"
 }
 
 export interface BatchAnalysisResult {
   score: number;
   label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
-  assets: AssetInfo[];
+  topAssets: AssetInfo[]; // 最多 5 个最热资产
+  dominantEmotion: string; // 主导情绪（恐慌/亢奋/迷茫/分歧/麻木/嘲讽 等）
+  emotionDetail: string; // 情绪细节描述 (2-3 句)
+  divergence: string; // 多空分歧 / 一致性描述
+  crowdBehavior: string; // 典型群体行为模式
+  hotTopics: string[]; // 讨论焦点（最多 5 个）
+  riskWarning: string; // 风险提示
+  marketInsight: string; // 基于行情、新闻、斐波那契、ORB 的补充分析
   summary: string;
   signal: string;
+}
+
+export interface BatchScoreResult {
+  score: number;
+  label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
+  dominantEmotion: string;
+  comment: string;
+}
+
+export interface AssetDetailAnalysis {
+  title: string;
+  mood: string;
+  news: string;
+  technical: string;
+  emotionSignal: string;
+  tradeView: string;
+  levels: string;
+  risk: string;
+}
+
+export async function analyzeBatchScore(
+  messages: { username: string; text: string }[],
+): Promise<BatchScoreResult> {
+  const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
+  const system = `你是散户投机群的轻量情绪评分器。只判断这批消息的群体情绪强度，不做行情、新闻、技术分析。
+
+【关键判别】
+- 先判断痛苦/亢奋来自多头还是空头，不要只看"跌懵了""求放过""完了"这类字面词。
+- 如果上下文出现"空/空的/意念空/偏空/上面空/空头/拿空"等，且同时出现"跌懵了""求放过""收手吧""外面全是警察""还拿着啊"，通常是空头被拉升打痛，说明市场/标的走势偏强，不能判成整体悲观。
+- 如果做空的人在炫耀"空了一下""空赚了"，才偏看跌/悲观。
+- 如果多头说"亏麻了/割肉/崩了/跌死了"，才偏悲观。
+- comment 必须说明是哪一边情绪更强，例如"空头被拉升打痛"或"多头恐慌割肉"。
+
+评分规则：
+- +0.8 ~ +1.0：极度亢奋、疯狂看涨、追涨或梭哈
+- +0.4 ~ +0.8：明显乐观
+- -0.2 ~ +0.2：中性、闲聊或分歧
+- -0.4 ~ -0.8：明显悲观
+- -0.8 ~ -1.0：极度恐慌、割肉、崩溃或绝望
+
+comment 写一句很短的中文点评，低于 30 字，不要给交易建议。
+
+只返回JSON，不要其他文字：
+{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","comment":"一句话点评"}`;
+
+  try {
+    const raw = await chat(
+      system,
+      `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
+      500,
+    );
+    const json = parseJSON(raw);
+    return {
+      score: Math.max(-1, Math.min(1, json.score)),
+      label: json.label ?? "中性",
+      dominantEmotion: json.dominantEmotion ?? "",
+      comment: json.comment ?? "情绪暂无明显极端变化。",
+    };
+  } catch (e) {
+    console.error("轻量情绪评分失败:", e);
+    return {
+      score: 0,
+      label: "中性",
+      dominantEmotion: "",
+      comment: "轻量评分解析失败。",
+    };
+  }
 }
 
 export async function analyzeBatch(
@@ -148,7 +263,15 @@ export async function analyzeBatch(
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
   const system = `你是散户投机群的情绪分析器，同时精通全球股票、期货、加密货币的代码和俗称。
 
-分析一批群消息的整体情感倾向，并识别提到的所有金融资产。
+深度分析一批群消息的群体情绪，重点是情绪本身，资产只作为辅助。
+
+【重要原则】只观察和描述情绪，绝对不评价群成员的能力、智商、性格、判断力。不要使用"盲从""嘴硬""被套装死""独立判断弱""跟风依赖""韭菜""不会操作"等任何带贬义或评判的措辞。用户只关心情绪本身的状态、强度和变化，不需要对人的评价。
+
+【多空持仓视角】
+必须先判断情绪来自多头还是空头：
+- 空头喊"跌懵了""求放过""收手吧""还拿着啊"通常是空头被上涨打痛，代表走势偏强/空头压力，不等于市场悲观。
+- 多头喊"亏麻了""割肉""崩了""跌死了"才更可能代表市场悲观/多头恐慌。
+- comment、emotionDetail、crowdBehavior 中要写清楚是"空头痛苦"、"多头恐慌"还是"多空分歧"。
 
 评分规则：
 - +0.8 ~ +1.0：群体极度亢奋，疯狂看涨
@@ -157,42 +280,176 @@ export async function analyzeBatch(
 - -0.4 ~ -0.8：整体偏悲观
 - -0.8 ~ -1.0：群体极度恐慌，割肉跑路
 
-assets 字段：识别所有提到的金融资产，包括股票俗称（${loadAssetHints()}、药哥=辉瑞等）、期货代码（ES=标普500期货、NQ=纳指期货）、加密货币、A股代码等。
-对每个资产返回：nickname（群里叫法）、name（正式名称）、ticker（交易代码）、exchange（交易所/市场）。
-如果不确定代码，ticker 填"未知"。
+【重点 - 情绪分析】
+dominantEmotion: 一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/麻木/FOMO/绝望/侥幸/狂热/犹豫 等）
+emotionDetail: 2-3 句话客观描述情绪状态本身，只观察情绪倾向和强度变化，不评价人的能力、性格、智商，不贴标签骂人。例：'多数人对反弹持怀疑，担忧二次探底；少部分人情绪转向乐观但带犹豫'。
+divergence: 描述多空分歧或共识程度（如"高度一致看空"/"多空分歧明显"/"情绪由空转多"），只说情绪状态，不评价人。
+crowdBehavior: 描述群体的情绪反应模式，只说情绪行为（如"追涨情绪上升"/"恐慌情绪蔓延"/"观望情绪占主导"/"FOMO情绪抬头"），禁止使用'嘴硬''被套装死''独立判断弱''盲从''韭菜'等带贬义/评判的措辞。
+hotTopics: 讨论焦点关键词，最多 5 个（如["美联储","英伟达财报","抄底","止损"]）
+riskWarning: 仅从情绪角度提示风险（如"情绪过于一致，反转概率升高"），不评价群成员。
 
-signal 字段：根据群体情绪质量判断操作方向。
-- 若群体情绪极端且一致（羊群效应明显、情绪化、无理由梭哈/割肉）→ 考虑反向操作
-- 若群体情绪有理有据（附带基本面/技术面分析、信息优势明显）→ 考虑跟随方向
-- 若情绪分歧或中性 → 观望
-signal 内容需说明：操作方向（跟随/反向/观望）、理由（一句话）、具体建议。
+【辅助 - 资产识别】
+topAssets: 只挑出讨论最热、提及最多的最多 5 个资产，不要全部列举。
+参考俗称：${loadAssetHints()}、药哥=辉瑞、ES=标普500期货、NQ=纳指期货等。
+每个资产返回：nickname（群里叫法）、name（正式名称）、ticker（交易代码）、exchange。
+不确定代码 ticker 填"未知"。
 
-只返回JSON，不要其他文字：
-{"score": 数字, "label": "极度悲观|悲观|中性|乐观|极度乐观", "assets": [{"nickname":"大G","name":"梅赛德斯-奔驰","ticker":"MBGYY","exchange":"OTC"}], "summary": "一句话描述群体情绪", "signal": "【跟随/反向/观望】理由 + 具体建议"}`;
+signal：根据情绪质量判断操作方向。
+- 极端且一致（情绪化、无脑梭哈/割肉）→ 反向
+- 有理有据（带基本面/技术面分析）→ 跟随
+- 分歧或中性 → 观望
+内容需含：操作方向、理由、具体建议。
+
+【实时行情约束】
+你必须优先使用用户消息里提供的行情上下文，不要使用过时记忆。
+如果行情上下文有当前价，summary/signal 中涉及价格时必须围绕该当前价描述。
+如果行情上下文显示行情获取失败，或者没有某资产当前价，禁止编造当前价、支撑位、压力位、目标价、区间价。
+除非群消息原文明确提到具体价位，否则不要生成类似 8400-8600 这样的具体价位区间。
+marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近新闻、斐波那契回撤位置、ORB 开盘区间状态。只引用行情上下文提供的数据；新闻没取到就说新闻缺失；技术数据不足就说数据不足。
+
+只返回JSON，不要其他文字。字符串值内禁止使用英文双引号，请用单引号或中文引号：
+{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","emotionDetail":"...","divergence":"...","crowdBehavior":"...","hotTopics":["..."],"riskWarning":"...","marketInsight":"...","topAssets":[{"nickname":"...","name":"...","ticker":"...","exchange":"..."}],"summary":"一句话总结","signal":"【跟随/反向/观望】理由+建议"}`;
 
   try {
+    const marketContext = await safeBuildMarketContext(messages);
     const raw = await chat(
       system,
-      `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
-      800,
+      `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
+      2000,
     );
     const json = parseJSON(raw);
+    const topAssets = Array.isArray(json.topAssets)
+      ? json.topAssets.slice(0, 5)
+      : Array.isArray(json.assets)
+        ? json.assets.slice(0, 5)
+        : [];
     return {
       score: Math.max(-1, Math.min(1, json.score)),
       label: json.label,
-      assets: Array.isArray(json.assets) ? json.assets : [],
-      summary: json.summary,
-      signal: json.signal,
+      topAssets,
+      dominantEmotion: json.dominantEmotion ?? "",
+      emotionDetail: json.emotionDetail ?? "",
+      divergence: json.divergence ?? "",
+      crowdBehavior: json.crowdBehavior ?? "",
+      hotTopics: Array.isArray(json.hotTopics) ? json.hotTopics.slice(0, 5) : [],
+      riskWarning: json.riskWarning ?? "",
+      marketInsight: json.marketInsight ?? "",
+      summary: json.summary ?? "",
+      signal: json.signal ?? "",
     };
-  } catch {
-    console.error("批量分析失败");
+  } catch (e) {
+    console.error("批量分析失败:", e);
     return {
       score: 0,
       label: "中性",
-      assets: [],
+      topAssets: [],
+      dominantEmotion: "",
+      emotionDetail: "",
+      divergence: "",
+      crowdBehavior: "",
+      hotTopics: [],
+      riskWarning: "",
+      marketInsight: "",
       summary: "解析失败",
       signal: "",
     };
+  }
+}
+
+export async function analyzeAssetDetail(
+  asset: AssetInfo,
+  batch: BatchAnalysisResult,
+  messages: { username: string; text: string }[],
+): Promise<AssetDetailAnalysis> {
+  const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
+  const system = `你是交易辅助分析器。针对单个热门资产，结合群聊情绪、最近新闻、斐波那契回撤和 ORB 开盘区间，输出一条独立分析。
+
+【核心要求】
+- 只分析资产和市场，不评价群成员人格或能力。
+- 可以使用"散户情绪浓厚""追涨情绪浓厚""悲观情绪浓厚"等客观表述。
+- 如果散户情绪浓厚、追涨情绪极端或悲观情绪浓厚，需要给出买入/卖出/观望评价。
+- 当本批群体情绪绝对值达到 0.75 以上，且方向较一致、散户情绪浓厚时，允许给【买入】或【卖出】候选，但必须写清触发点位和仓位克制。
+- 当本批群体情绪绝对值达到 0.85 以上，且出现疯狂追涨、无脑看多、恐慌割肉、绝望看空等情绪时，可以更明确地标注为强反向信号。
+- 如果只是普通乐观/普通悲观/分歧明显，即使有技术点位，也必须给【观望】，写等待情绪升温或关键位确认。
+- 点位必须来自行情上下文里的当前价、斐波那契位、ORB 高低点；禁止编造上下文没有的价位。
+- 如果行情上下文显示行情获取失败或技术数据不足，tradeView 和 levels 必须降级为观望/等待数据，不得给具体点位。
+- 这不是投资建议，要强调仓位和止损风险。
+
+【字段要求】
+title: 资产名 + ticker。
+mood: 该资产在群里的情绪状态，1句。
+news: 最近新闻摘要；没取到新闻就说新闻缺失。
+technical: 斐波那契和 ORB 状态，引用具体点位。
+emotionSignal: 情绪是否过热/过悲观，以及反向意义。
+tradeView: 【买入/卖出/观望】+ 触发条件。0.75 以上可给买卖候选，0.85 以上才可写强反向信号；否则观望。
+levels: 关键点位，必须来自行情上下文；可写'ORB高/低、Fib xx%、当前价附近'。
+risk: 1句风险提示。
+
+只返回JSON，不要其他文字。字符串值内禁止使用英文双引号，请用单引号或中文引号：
+{"title":"...","mood":"...","news":"...","technical":"...","emotionSignal":"...","tradeView":"【买入/卖出/观望】...","levels":"...","risk":"..."}`;
+
+  try {
+    const marketContext = await safeBuildAssetMarketContext(asset);
+    const raw = await chat(
+      system,
+      [
+        `目标资产：${asset.nickname}/${asset.name}/${asset.ticker}/${asset.exchange}`,
+        ``,
+        `行情/新闻/技术上下文：`,
+        marketContext,
+        ``,
+        `本批群体情绪：${batch.label}，得分 ${batch.score.toFixed(2)}，主导情绪 ${batch.dominantEmotion}`,
+        `情绪细节：${batch.emotionDetail}`,
+        `分歧状态：${batch.divergence}`,
+        ``,
+        `最近群消息：`,
+        formatted,
+      ].join("\n"),
+      1200,
+    );
+    const json = parseJSON(raw);
+    return {
+      title: json.title ?? `${asset.name} ${asset.ticker}`,
+      mood: json.mood ?? "",
+      news: json.news ?? "",
+      technical: json.technical ?? "",
+      emotionSignal: json.emotionSignal ?? "",
+      tradeView: json.tradeView ?? "【观望】数据不足或情绪不极端",
+      levels: json.levels ?? "",
+      risk: json.risk ?? "",
+    };
+  } catch (e) {
+    console.error(`单票分析失败 ${asset.nickname}(${asset.ticker}):`, e);
+    return {
+      title: `${asset.name} ${asset.ticker}`,
+      mood: "解析失败",
+      news: "解析失败",
+      technical: "解析失败",
+      emotionSignal: "解析失败",
+      tradeView: "【观望】解析失败",
+      levels: "",
+      risk: "数据异常，先不做交易判断。",
+    };
+  }
+}
+
+async function safeBuildMarketContext(
+  messages: { text: string }[],
+): Promise<string> {
+  try {
+    return await buildMarketContext(messages);
+  } catch (err) {
+    console.error("行情上下文构建失败，已降级:", err);
+    return "行情上下文构建失败；禁止编造当前价、新闻、支撑位、压力位、目标价。";
+  }
+}
+
+async function safeBuildAssetMarketContext(asset: AssetInfo): Promise<string> {
+  try {
+    return await buildAssetMarketContext(asset);
+  } catch (err) {
+    console.error(`单票行情上下文构建失败 ${asset.nickname}(${asset.ticker}):`, err);
+    return `${asset.nickname}/${asset.name}(${asset.ticker}, ${asset.exchange})：行情上下文构建失败，禁止编造当前价、新闻、支撑位、压力位、目标价。`;
   }
 }
 
@@ -272,6 +529,7 @@ export async function analyzePanicHype(
 - 鬼叫+炫耀同时出现 → 单边行情，分化严重，不稳定
 - 讨论以技术面/基本面为主，情绪平稳 → 较稳定
 - events数组：只记录有明显情绪爆发的消息，每条quote截取最能体现情绪的原文片段(≤40字)
+- 所有字符串值中不得包含英文双引号，如原文有双引号请改用单引号或省略
 
 ━━━ 鬼叫排行榜 ━━━
 leaderboard：统计每个有情绪发言的用户，最多返回10人，按情绪强度综合排名（强烈鬼叫/炫耀权重更高）。
@@ -374,7 +632,7 @@ export async function analyzeBombUser(
 - 用户强烈恐慌（fearIndex 60-80）→ 加仓
 - 其他 → 观望
 
-keyMessages：挑出最能体现该用户今日情绪的原话（≤5条，≤40字/条），不要带用户名。
+keyMessages：挑出最能体现该用户今日情绪的原话（≤5条，≤40字/条），不要带用户名，原话中的英文双引号改为单引号。
 
 只返回JSON，不要其他文字：
 {"bombIndex":0-100整数,"fearIndex":0-100整数,"signal":"强烈卖出|减仓|观望|加仓|强烈买入","signalEmoji":"🔴/🟠/⚪/🟢/💚","mood":"一句话描述今日情绪状态","keyMessages":["发言1","发言2"],"summary":"3-4句整体分析，重点说明情绪依据","action":"具体操作建议（仓位、时机）","reasoning":"逆向逻辑说明（为什么反向操作）"}`;
