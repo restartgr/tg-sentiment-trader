@@ -251,7 +251,7 @@ async function main() {
         await runBatchAnalysis(groupId, batch);
       }
     },
-    new NewMessage({ incoming: true }),
+    new NewMessage({ incoming: true, outgoing: true }),
   );
 
   console.log("🤖 机器人运行中（只读监控），按 Ctrl+C 退出...\n");
