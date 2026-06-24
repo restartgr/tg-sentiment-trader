@@ -46,7 +46,7 @@ export const config = {
     bombTarget: process.env.TG_BOMB_TARGET ?? "",
   },
   llm: {
-    apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+    apiKey: requireEnv("ANTHROPIC_API_KEY"),
     // 模型分层：light 跑高频的轻量评分（便宜模型先筛），deep 跑重要的深度分析
     modelLight: process.env.MODEL_LIGHT ?? "claude-haiku-4-5",
     modelDeep: process.env.MODEL_DEEP ?? "claude-sonnet-4-6",

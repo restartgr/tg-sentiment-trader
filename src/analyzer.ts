@@ -33,13 +33,8 @@ function loadAssetHints(): string {
   }
 }
 
-const anthropicClient = config.llm.apiKey
-  ? new Anthropic({ apiKey: config.llm.apiKey })
-  : null;
-
-if (!anthropicClient) {
-  throw new Error("请在 .env 中配置 ANTHROPIC_API_KEY");
-}
+// apiKey 在 config 层已用 requireEnv 强制必填，这里可无条件构造。
+const anthropicClient = new Anthropic({ apiKey: config.llm.apiKey });
 
 // light：高频的轻量评分/筛选，用便宜模型。deep：重要的深度分析，用旗舰模型。
 type ModelTier = "light" | "deep";
@@ -58,7 +53,7 @@ async function chat(
   maxTokens: number,
   tier: ModelTier = "deep",
 ): Promise<string> {
-  const res = await anthropicClient!.messages.create({
+  const res = await anthropicClient.messages.create({
     model: pickModel(tier),
     max_tokens: maxTokens,
     system,
