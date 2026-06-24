@@ -64,11 +64,11 @@ export const config = {
     extremeThreshold: parseFloatEnv("SENTIMENT_EXTREME_THRESHOLD", 0.75),
     // 两次提醒之间的最小间隔（分钟），避免刷屏
     cooldownMinutes: parseIntEnv("SENTIMENT_COOLDOWN_MINUTES", 30),
-    // 简单分析：超过该情绪绝对值时，轻量总览会标记为简单分析
+    // 简单分析档：>= 此值进入深度分析（但不调实时行情），< 此值仅发轻量总览
     simpleAnalysisMinAbsScore: parseFloatEnv("SIMPLE_ANALYSIS_MIN_ABS_SCORE", 0.6),
-    // 重点监控：超过该情绪绝对值才做深度分析
+    // 监控档：>= 此值的深度分析会调取实时行情/斐波/ORB
     monitorMinAbsScore: parseFloatEnv("MONITOR_MIN_ABS_SCORE", 0.65),
-    // 单票详细分析：只在群体情绪绝对值超过该阈值时触发
+    // 单票详细分析：>= 此值才逐个跑 Top 资产单票分析
     assetDetailMinAbsScore: parseFloatEnv("ASSET_DETAIL_MIN_ABS_SCORE", 0.75),
     // 单票详细分析数量
     assetDetailCount: parseIntEnv("ASSET_DETAIL_COUNT", 3),

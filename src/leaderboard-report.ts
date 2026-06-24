@@ -17,7 +17,7 @@ function formatLeaderboard(result: PanicHypeResult, dateLabel: string): string {
 
   const medals = ["🥇", "🥈", "🥉"];
   const lines: string[] = [
-    `🏆 鬼叫排行榜 · ${dateLabel} · 10:00-15:30 JST`,
+    `🏆 鬼叫排行榜 · ${dateLabel} · 09:00-15:00 JST`,
     ``,
   ];
 

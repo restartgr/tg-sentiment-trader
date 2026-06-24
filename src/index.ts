@@ -7,6 +7,8 @@ import {
   analyzeBatchScore,
   AssetDetailAnalysis,
   BatchScoreResult,
+  buildBatchMarketContext,
+  NO_MARKET_CONTEXT,
 } from "./analyzer";
 import {
   createTelegramClient,
@@ -21,6 +23,46 @@ import {
 interface BufferedMessage {
   username: string;
   text: string;
+}
+
+type AnalysisTier = "simple" | "monitor" | "detail";
+
+interface TierRule {
+  tier: AnalysisTier;
+  minAbsScore: number; // 轻量评分绝对值达到此值即命中该档
+  includeMarket: boolean; // 是否调取实时行情上下文
+  runAssetDetail: boolean; // 是否逐个跑 Top 资产单票分析
+  banner: string; // 告警消息里的档位提示行
+}
+
+// 从高到低排列，命中第一个达标的档位；都不达标 → 只发轻量总览。
+// 档位由轻量评分锁定，保证「是否调行情」与「是否单票分析」始终一致。
+const ANALYSIS_TIERS: TierRule[] = [
+  {
+    tier: "detail",
+    minAbsScore: config.sentiment.assetDetailMinAbsScore,
+    includeMarket: true,
+    runAssetDetail: true,
+    banner: "🔥 主要监控：情绪已进入单票分析区，可结合点位考虑买卖",
+  },
+  {
+    tier: "monitor",
+    minAbsScore: config.sentiment.monitorMinAbsScore,
+    includeMarket: true,
+    runAssetDetail: false,
+    banner: "👀 进入监控区：情绪开始有交易价值，先观察点位和后续发酵",
+  },
+  {
+    tier: "simple",
+    minAbsScore: config.sentiment.simpleAnalysisMinAbsScore,
+    includeMarket: false,
+    runAssetDetail: false,
+    banner: "🔍 简单分析区：情绪有方向但未进监控区，本档未结合实时行情，仅供参考",
+  },
+];
+
+function resolveTier(absScore: number): TierRule | null {
+  return ANALYSIS_TIERS.find((rule) => absScore >= rule.minAbsScore) ?? null;
 }
 
 function tidyBlock(text: string): string {
@@ -59,21 +101,12 @@ function formatAssetDetail(detail: AssetDetailAnalysis): string {
 
 function formatQuickScore(result: BatchScoreResult): string {
   const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
-  const absScore = Math.abs(result.score);
-  const title =
-    absScore >= config.sentiment.simpleAnalysisMinAbsScore
-      ? "情绪总览（简单分析）"
-      : "情绪总览";
-  const note =
-    absScore >= config.sentiment.simpleAnalysisMinAbsScore
-      ? "情绪有一定方向，但未进入重点监控区。"
-      : "日常波动，暂不深入分析。";
 
   return [
-    `${emoji} ${title}：${result.label} (${(result.score * 100).toFixed(0)}%)`,
+    `${emoji} 情绪总览：${result.label} (${(result.score * 100).toFixed(0)}%)`,
     result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
     `💬 ${result.comment}`,
-    `🧭 ${note}`,
+    `🧭 日常波动，暂不深入分析。`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -108,7 +141,10 @@ async function main() {
       const quick = await analyzeBatchScore(buffer);
       const quickAbsScore = Math.abs(quick.score);
 
-      if (quickAbsScore < config.sentiment.monitorMinAbsScore) {
+      const rule = resolveTier(quickAbsScore);
+
+      // 未达最低档（默认 < 0.6）：只发轻量总览
+      if (!rule) {
         console.log(
           `📎 轻量总览完成 | ${quick.label}(${quick.score.toFixed(2)}) | ${quick.comment}`,
         );
@@ -116,23 +152,19 @@ async function main() {
         return;
       }
 
-      const result = await analyzeBatch(buffer);
+      // 行情上下文由调用方按档位准备好再注入，analyzeBatch 不关心是否拉取。
+      const marketContext = rule.includeMarket
+        ? await buildBatchMarketContext(buffer)
+        : NO_MARKET_CONTEXT;
+      const result = await analyzeBatch(buffer, marketContext);
       const assetsShort =
         result.topAssets.map((a) => `${a.nickname}(${a.ticker})`).join(", ") ||
         "无";
       console.log(
-        `📊 批量分析完成 | ${result.label}(${result.score.toFixed(2)}) | ${result.dominantEmotion} | Top: ${assetsShort} | ${result.summary}`,
+        `📊 ${rule.tier} 分析完成 | ${result.label}(${result.score.toFixed(2)}) | ${result.dominantEmotion} | 行情:${rule.includeMarket ? "是" : "否"} | Top: ${assetsShort} | ${result.summary}`,
       );
 
-      const absScore = Math.abs(result.score);
-      const isBullish = result.score > 0;
-      const emoji = isBullish ? "🚨📈" : "🚨📉";
-      const monitorLine =
-        absScore >= config.sentiment.assetDetailMinAbsScore
-          ? "🔥 主要监控：情绪已进入单票分析区，可结合点位考虑买卖"
-          : absScore >= config.sentiment.monitorMinAbsScore
-            ? "👀 进入监控区：情绪开始有交易价值，先观察点位和后续发酵"
-            : "";
+      const emoji = result.score > 0 ? "🚨📈" : "🚨📉";
 
       let assetsStr = "";
       if (result.topAssets.length > 0) {
@@ -150,12 +182,17 @@ async function main() {
         ? `\n\n🔥 讨论焦点：${result.hotTopics.join("、")}`
         : "";
 
+      const marketInsightStr =
+        rule.includeMarket && result.marketInsight
+          ? `\n\n📈 行情视角：${result.marketInsight}`
+          : "";
+
       const msg = [
         `${emoji} 群体情绪告警：${result.label}`,
         ``,
         `📊 情感得分：${(result.score * 100).toFixed(0)}%`,
         `🎭 主导情绪：${result.dominantEmotion}`,
-        monitorLine,
+        rule.banner,
         ``,
         `💭 情绪剖析：`,
         result.emotionDetail,
@@ -163,7 +200,7 @@ async function main() {
         `⚖️ 分歧状态：${result.divergence}`,
         `👥 群体行为：${result.crowdBehavior}`,
         result.riskWarning ? `\n⚠️ 风险提示：${result.riskWarning}` : "",
-        `${topicsStr}${assetsStr}`,
+        `${topicsStr}${assetsStr}${marketInsightStr}`,
         ``,
         `💡 总结：${result.summary}`,
         `🎯 ${result.signal}`,
@@ -173,10 +210,8 @@ async function main() {
 
       await sendToSavedMessages(client, msg);
 
-      if (absScore < config.sentiment.assetDetailMinAbsScore) {
-        console.log(
-          `⏭️ 情绪未达到单票分析阈值 ${config.sentiment.assetDetailMinAbsScore}，仅发送总览`,
-        );
+      if (!rule.runAssetDetail) {
+        console.log(`⏭️ 当前档位 ${rule.tier}，仅发送总览`);
         return;
       }
 

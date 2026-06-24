@@ -257,8 +257,20 @@ comment 写一句很短的中文点评，低于 30 字，不要给交易建议�
   }
 }
 
+// 简单分析档使用：不调行情时注入此上下文，约束模型不要编造任何价位。
+export const NO_MARKET_CONTEXT =
+  "本档为简单分析，未调取实时行情。禁止输出任何当前价、支撑位、压力位、目标价、新闻或具体价位区间；marketInsight 请固定返回'本档未调取行情，仅基于群聊情绪'。";
+
+// 行情上下文抽成独立方法，由调用方决定是否拉取、再注入 analyzeBatch。
+export async function buildBatchMarketContext(
+  messages: { text: string }[],
+): Promise<string> {
+  return safeBuildMarketContext(messages);
+}
+
 export async function analyzeBatch(
   messages: { username: string; text: string }[],
+  marketContext: string,
 ): Promise<BatchAnalysisResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
   const system = `你是散户投机群的情绪分析器，同时精通全球股票、期货、加密货币的代码和俗称。
@@ -311,7 +323,6 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
 {"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","emotionDetail":"...","divergence":"...","crowdBehavior":"...","hotTopics":["..."],"riskWarning":"...","marketInsight":"...","topAssets":[{"nickname":"...","name":"...","ticker":"...","exchange":"..."}],"summary":"一句话总结","signal":"【跟随/反向/观望】理由+建议"}`;
 
   try {
-    const marketContext = await safeBuildMarketContext(messages);
     const raw = await chat(
       system,
       `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
@@ -493,7 +504,7 @@ export async function analyzePanicHype(
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
   const system = `你是专业的散户群聊行为分析师，擅长从聊天记录中识别极端情绪行为并判断市场稳定性。
 
-分析时间段为开盘期间（10:00-15:30），聚焦交易行为中的情绪爆发。
+分析时间段为交易时段（09:00-15:00 JST，含盘中全程），聚焦交易行为中的情绪爆发。
 
 【重要原则】只分析纯情绪化发言，忽略以下内容：
 - 技术分析、K线形态、支撑压力位讨论
