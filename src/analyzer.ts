@@ -504,7 +504,7 @@ export async function analyzePanicHype(
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
   const system = `你是专业的散户群聊行为分析师，擅长从聊天记录中识别极端情绪行为并判断市场稳定性。
 
-分析时间段为开盘期间（10:00-15:30），聚焦交易行为中的情绪爆发。
+分析时间段为交易时段（09:00-15:00 JST，含盘中全程），聚焦交易行为中的情绪爆发。
 
 【重要原则】只分析纯情绪化发言，忽略以下内容：
 - 技术分析、K线形态、支撑压力位讨论

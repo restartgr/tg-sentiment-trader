@@ -10,8 +10,8 @@ dotenv.config();
 export const SESSION_FILE = path.join(process.cwd(), "session.txt");
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-const DEFAULT_OPEN_UTC_MIN = 1 * 60;
-const DEFAULT_CLOSE_UTC_MIN = 6 * 60 + 30;
+const DEFAULT_OPEN_UTC_MIN = 0; // 09:00 JST
+const DEFAULT_CLOSE_UTC_MIN = 6 * 60; // 15:00 JST
 
 export function readSessionString(): string {
   if (!fs.existsSync(SESSION_FILE)) return "";

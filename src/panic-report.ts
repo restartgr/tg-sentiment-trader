@@ -18,7 +18,7 @@ function formatReport(result: PanicHypeResult, msgCount: number, dateLabel: stri
   const stabilityEmoji = result.stabilityScore < 30 ? "🌋" : result.stabilityScore < 50 ? "⚠️" : result.stabilityScore < 70 ? "😬" : "🟢";
 
   const lines: string[] = [
-    `👻 鬼叫指数日报 · ${dateLabel} · 10:00-15:30 JST`,
+    `👻 鬼叫指数日报 · ${dateLabel} · 09:00-15:00 JST`,
     `分析消息：${msgCount} 条`,
     ``,
     `${stabilityEmoji} 市场稳定性  ${bar(result.stabilityScore)}  ${result.stabilityScore}/100（${result.stabilityLabel}）`,
@@ -74,7 +74,7 @@ async function main() {
         .reverse();
 
       const todayTotal = allMessages.filter(m => m.date * 1000 >= dayStart && m.text?.trim()).length;
-      console.log(`   拉取总计：${allMessages.length} 条 | 今日有文本：${todayTotal} 条 | 开盘时段：${filtered.length} 条（10:00-15:30 JST）`);
+      console.log(`   拉取总计：${allMessages.length} 条 | 今日有文本：${todayTotal} 条 | 交易时段：${filtered.length} 条（09:00-15:00 JST）`);
 
       if (filtered.length === 0) {
         console.log(`   ⚠️ 暂无开盘期消息`);
