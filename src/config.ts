@@ -60,7 +60,7 @@ export const config = {
   },
   sentiment: {
     // 情感分析触发条件：连续 N 条消息的平均分超过阈值
-    batchSize: parseIntEnv("SENTIMENT_BATCH_SIZE", 20),
+    batchSize: parseIntEnv("SENTIMENT_BATCH_SIZE", 30),
     windowSize: parseIntEnv("SENTIMENT_WINDOW_SIZE", 3),
     // 极端阈值：-1.0（极度悲观）~ 1.0（极度乐观），超过才触发
     extremeThreshold: parseFloatEnv("SENTIMENT_EXTREME_THRESHOLD", 0.75),

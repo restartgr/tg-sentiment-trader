@@ -6,7 +6,7 @@
 
 ## 核心：四档情绪分析漏斗
 
-实时监控按每 `SENTIMENT_BATCH_SIZE`(默认 20) 条消息触发一次。先用一次轻量评分（不调行情）打分，再按**情绪绝对值**决定分析深度，逐级递增成本：
+实时监控按每 `SENTIMENT_BATCH_SIZE`(默认 30) 条消息触发一次。先用一次轻量评分（不调行情）打分，再按**情绪绝对值**决定分析深度，逐级递增成本：
 
 | 情绪绝对值 | 档位 | 分析内容 | 调实时行情 | 单票分析 |
 |---|---|---|---|---|
@@ -65,7 +65,7 @@ pnpm start          # 或 pnpm dev（带热重载）
 | `TG_MY_USER_ID` | 你自己的 Telegram User ID（发消息给 @userinfobot 获取） |
 | `ANTHROPIC_API_KEY` | Anthropic API Key（必填） |
 | `MODEL_LIGHT` / `MODEL_DEEP` | 模型分层（可选）：light 跑高频轻量评分（默认 `claude-haiku-4-5`），deep 跑深度分析（默认 `claude-sonnet-4-6`） |
-| `SENTIMENT_BATCH_SIZE` | 每多少条消息分析一次（默认 20） |
+| `SENTIMENT_BATCH_SIZE` | 每多少条消息分析一次（默认 30） |
 | `SIMPLE_ANALYSIS_MIN_ABS_SCORE` | 简单分析档下限（默认 0.6）：`>=` 进入深度分析但不调行情 |
 | `MONITOR_MIN_ABS_SCORE` | 监控档下限（默认 0.65）：`>=` 的深度分析会调取实时行情 |
 | `ASSET_DETAIL_MIN_ABS_SCORE` | 单票分析下限（默认 0.75）：`>=` 才逐个跑 Top 资产单票分析 |
