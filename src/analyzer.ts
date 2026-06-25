@@ -1,5 +1,4 @@
 import Anthropic from "@anthropic-ai/sdk";
-import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
@@ -34,50 +33,28 @@ function loadAssetHints(): string {
   }
 }
 
-// 优先用千问，其次 Anthropic
-const USE_QIANWEN = !!config.llm.qianwenKey;
+// apiKey 在 config 层已用 requireEnv 强制必填，这里可无条件构造。
+const anthropicClient = new Anthropic({ apiKey: config.llm.apiKey });
 
-const qianwenClient = USE_QIANWEN
-  ? new OpenAI({
-      apiKey: config.llm.qianwenKey || process.env.DASHSCOPE_API_KEY,
-      baseURL: "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1",
-    })
-  : null;
+// light：高频的轻量评分/筛选，用便宜模型。deep：重要的深度分析，用旗舰模型。
+type ModelTier = "light" | "deep";
 
-const anthropicClient =
-  !USE_QIANWEN && config.llm.anthropicKey
-    ? new Anthropic({ apiKey: config.llm.anthropicKey })
-    : null;
-
-if (!USE_QIANWEN && !anthropicClient) {
-  throw new Error("请在 .env 中配置 QIANWEN_API_KEY 或 ANTHROPIC_API_KEY");
+function pickModel(tier: ModelTier): string {
+  return tier === "light" ? config.llm.modelLight : config.llm.modelDeep;
 }
 
 console.log(
-  `🤖 使用模型：${USE_QIANWEN ? "千问 qwen3-max" : "Claude claude-sonnet-4-6"}`,
+  `🤖 使用模型：light=${config.llm.modelLight} / deep=${config.llm.modelDeep}`,
 );
 
 async function chat(
   system: string,
   user: string,
   maxTokens: number,
+  tier: ModelTier = "deep",
 ): Promise<string> {
-  if (USE_QIANWEN && qianwenClient) {
-    const res = await qianwenClient.chat.completions.create({
-      model: "qwen3-max",
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      // @ts-ignore — dashscope 扩展参数，关闭思考过程避免干扰 JSON 解析
-      extra_body: { enable_thinking: false },
-    });
-    return res.choices[0]?.message?.content ?? "";
-  }
-  // Anthropic
-  const res = await anthropicClient!.messages.create({
-    model: "claude-sonnet-4-6",
+  const res = await anthropicClient.messages.create({
+    model: pickModel(tier),
     max_tokens: maxTokens,
     system,
     messages: [{ role: "user", content: user }],
@@ -156,7 +133,7 @@ export async function analyzeSentiment(
 {"score": 数字, "label": "极度悲观|悲观|中性|乐观|极度乐观", "reasoning": "一句话"}`;
 
   try {
-    const raw = await chat(system, `@${username}：${text}`, 300);
+    const raw = await chat(system, `@${username}：${text}`, 300, "light");
     const json = parseJSON(raw);
     return {
       score: Math.max(-1, Math.min(1, json.score)),
@@ -238,6 +215,7 @@ comment 写一句很短的中文点评，低于 30 字，不要给交易建议�
       system,
       `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
       500,
+      "light",
     );
     const json = parseJSON(raw);
     return {
