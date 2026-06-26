@@ -6,6 +6,7 @@ import {
   analyzeBatch,
   analyzeBatchScore,
   AssetDetailAnalysis,
+  BatchAnalysisResult,
   BatchScoreResult,
   buildBatchMarketContext,
   NO_MARKET_CONTEXT,
@@ -36,7 +37,7 @@ interface TierRule {
 }
 
 // 从高到低排列，命中第一个达标的档位；都不达标 → 只发轻量总览。
-// 档位由轻量评分锁定，保证「是否调行情」与「是否单票分析」始终一致。
+// 轻量评分决定是否进入复核；深度分析后会按最终分数确认或降级档位。
 const ANALYSIS_TIERS: TierRule[] = [
   {
     tier: "detail",
@@ -63,6 +64,16 @@ const ANALYSIS_TIERS: TierRule[] = [
 
 function resolveTier(absScore: number): TierRule | null {
   return ANALYSIS_TIERS.find((rule) => absScore >= rule.minAbsScore) ?? null;
+}
+
+function tierRank(rule: TierRule): number {
+  return ANALYSIS_TIERS.length - ANALYSIS_TIERS.indexOf(rule);
+}
+
+function resolveEffectiveTier(initialRule: TierRule, finalScore: number): TierRule | null {
+  const finalRule = resolveTier(Math.abs(finalScore));
+  if (!finalRule) return null;
+  return tierRank(finalRule) <= tierRank(initialRule) ? finalRule : initialRule;
 }
 
 function tidyBlock(text: string): string {
@@ -112,6 +123,22 @@ function formatQuickScore(result: BatchScoreResult): string {
     .join("\n");
 }
 
+function formatDowngradedAnalysis(
+  result: BatchAnalysisResult,
+  initialRule: TierRule,
+): string {
+  const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
+
+  return [
+    `${emoji} 情绪总览：${result.label} (${(result.score * 100).toFixed(0)}%)`,
+    result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
+    `💬 ${result.summary}`,
+    `🧭 轻量评分触发 ${initialRule.tier} 复核，但深度复核未达监控阈值，暂不进入监控区。`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 async function main() {
   if (!readSessionString()) {
     console.error("❌ 未找到 session，请先运行: pnpm auth");
@@ -143,7 +170,7 @@ async function main() {
 
       const rule = resolveTier(quickAbsScore);
 
-      // 未达最低档（默认 < 0.6）：只发轻量总览
+      // 未达最低档（默认 < 0.5）：只发轻量总览
       if (!rule) {
         console.log(
           `📎 轻量总览完成 | ${quick.label}(${quick.score.toFixed(2)}) | ${quick.comment}`,
@@ -157,12 +184,18 @@ async function main() {
         ? await buildBatchMarketContext(buffer)
         : NO_MARKET_CONTEXT;
       const result = await analyzeBatch(buffer, marketContext);
+      const effectiveRule = resolveEffectiveTier(rule, result.score);
       const assetsShort =
         result.topAssets.map((a) => `${a.nickname}(${a.ticker})`).join(", ") ||
         "无";
       console.log(
-        `📊 ${rule.tier} 分析完成 | ${result.label}(${result.score.toFixed(2)}) | ${result.dominantEmotion} | 行情:${rule.includeMarket ? "是" : "否"} | Top: ${assetsShort} | ${result.summary}`,
+        `📊 ${rule.tier} 分析完成 | 复核档位:${effectiveRule?.tier ?? "quick"} | ${result.label}(${result.score.toFixed(2)}) | ${result.dominantEmotion} | 行情:${rule.includeMarket ? "是" : "否"} | Top: ${assetsShort} | ${result.summary}`,
       );
+
+      if (!effectiveRule) {
+        await sendToSavedMessages(client, formatDowngradedAnalysis(result, rule));
+        return;
+      }
 
       const emoji = result.score > 0 ? "🚨📈" : "🚨📉";
 
@@ -183,7 +216,7 @@ async function main() {
         : "";
 
       const marketInsightStr =
-        rule.includeMarket && result.marketInsight
+        effectiveRule.includeMarket && result.marketInsight
           ? `\n\n📈 行情视角：${result.marketInsight}`
           : "";
 
@@ -192,7 +225,7 @@ async function main() {
         ``,
         `📊 情感得分：${(result.score * 100).toFixed(0)}%`,
         `🎭 主导情绪：${result.dominantEmotion}`,
-        rule.banner,
+        effectiveRule.banner,
         ``,
         `💭 情绪剖析：`,
         result.emotionDetail,
@@ -210,8 +243,8 @@ async function main() {
 
       await sendToSavedMessages(client, msg);
 
-      if (!rule.runAssetDetail) {
-        console.log(`⏭️ 当前档位 ${rule.tier}，仅发送总览`);
+      if (!effectiveRule.runAssetDetail) {
+        console.log(`⏭️ 当前档位 ${effectiveRule.tier}，仅发送总览`);
         return;
       }
 
