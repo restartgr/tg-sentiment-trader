@@ -64,7 +64,7 @@ pnpm start          # 或 pnpm dev（带热重载）
 | `TG_TARGET_GROUPS` | 要监控的群组，逗号分隔。推荐用 username 或数字 chat id（invite link 会过期） |
 | `TG_MY_USER_ID` | 你自己的 Telegram User ID（发消息给 @userinfobot 获取） |
 | `ANTHROPIC_API_KEY` | Anthropic API Key（必填） |
-| `MODEL_LIGHT` / `MODEL_DEEP` | 模型分层（可选）：light 跑高频轻量评分（默认 `claude-haiku-4-5`），deep 跑深度分析（默认 `claude-sonnet-4-6`） |
+| `MODEL_LIGHT` / `MODEL_DEEP` | 模型分层（可选）：light 跑高频轻量评分，deep 跑深度分析（两者默认均为 `claude-sonnet-4-6`；Haiku 首轮评分偏差大，省钱可把 light 改回 `claude-haiku-4-5`） |
 | `SENTIMENT_BATCH_SIZE` | 每多少条消息分析一次（默认 20） |
 | `SIMPLE_ANALYSIS_MIN_ABS_SCORE` | 简单分析档下限（默认 0.5）：`>=` 进入深度分析但不调行情 |
 | `MONITOR_MIN_ABS_SCORE` | 监控档下限（默认 0.6）：`>=` 的深度分析会调取实时行情 |
