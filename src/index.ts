@@ -113,10 +113,22 @@ function formatAssetDetail(detail: AssetDetailAnalysis): string {
 function formatQuickScore(result: BatchScoreResult): string {
   const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
 
+  const assetsStr = result.topAssets.length
+    ? `\n🗣️ 聊得最多：\n` +
+      result.topAssets
+        .map((a) => {
+          const code = a.ticker && a.ticker !== "未知" ? `(${a.ticker})` : "";
+          const topic = a.topic ? `：${a.topic}` : "";
+          return `  • ${a.nickname}${code}${topic}`;
+        })
+        .join("\n")
+    : "";
+
   return [
     `${emoji} 情绪总览：${result.label} (${(result.score * 100).toFixed(0)}%)`,
     result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
     `💬 ${result.comment}`,
+    assetsStr,
     `🧭 日常波动，暂不深入分析。`,
   ]
     .filter(Boolean)
