@@ -53,14 +53,25 @@ async function chat(
   maxTokens: number,
   tier: ModelTier = "deep",
 ): Promise<string> {
+  const model = pickModel(tier);
   const res = await anthropicClient.messages.create({
-    model: pickModel(tier),
+    model,
     max_tokens: maxTokens,
     system,
     messages: [{ role: "user", content: user }],
   });
-  const block = res.content[0];
-  return block.type === "text" ? block.text : "";
+  const text = res.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+  // 命中 max_tokens 会把 JSON 从中间截断，后续 JSON.parse 只会报
+  // "Unexpected end of JSON input" 这种看不出原因的错，这里提前点明。
+  if (res.stop_reason === "max_tokens") {
+    console.warn(
+      `⚠️ 模型输出被 max_tokens(${maxTokens}) 截断，请调大上限；已输出 ${res.usage.output_tokens} tokens`,
+    );
+  }
+  return text;
 }
 
 function parseJSON(raw: string): any {
@@ -211,13 +222,19 @@ export async function analyzeBatchScore(
 - 如果多头说"亏麻了/割肉/崩了/跌死了"，才偏悲观。
 - comment 必须说明是哪一边情绪更强，例如"空头被拉升打痛"或"多头恐慌割肉"。
 
+【打分方式，非常重要】
+- 先把闲聊、灌水、问路、表情包这类背景噪音剔掉，只看真正表达了市场方向/情绪的消息，别让噪音把分数稀释到中性。
+- 在这些"有效消息"里判断主导方向：如果相当一部分人（不是一两条孤立发言，而是形成了气氛）在看涨/看跌/恐慌/亢奋，就把分数拉向对应方向。
+- 少数几条孤立的极端发言，若没被其他人呼应、没形成群体气氛，不足以定调，按轻微档处理即可。
+- 落在中性区（-0.2~+0.2），要么是有效消息里多空分歧僵持，要么是整批基本没人表达明确方向。
+
 评分规则：
 - +0.65 ~ +1.0：极度亢奋、疯狂看涨、追涨或梭哈
-- +0.5 ~ +0.65：明显乐观
-- +0.2 ~ +0.5：轻微乐观
-- -0.2 ~ +0.2：中性、闲聊或分歧
-- -0.2 ~ -0.5：轻微悲观
-- -0.5 ~ -0.65：明显悲观
+- +0.5 ~ +0.65：明显乐观（一群人形成看涨/上车气氛）
+- +0.2 ~ +0.5：轻微乐观（有人看涨但未成气候，或仅少数孤立发言）
+- -0.2 ~ +0.2：中性、闲聊或多空分歧僵持
+- -0.2 ~ -0.5：轻微悲观（有人看空但未成气候，或仅少数孤立发言）
+- -0.5 ~ -0.65：明显悲观（一群人形成看空/割肉气氛）
 - -0.65 ~ -1.0：极度恐慌、割肉、崩溃或绝望
 
 comment 写一句很短的中文点评，低于 30 字，不要给交易建议。
@@ -237,7 +254,7 @@ comment 写一句很短的中文点评，低于 30 字，不要给交易建议�
     const raw = await chat(
       system,
       `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
-      700,
+      2000,
       "light",
     );
     const json = parseJSON(raw);
@@ -313,7 +330,7 @@ hotTopics: 讨论焦点关键词，最多 5 个（如["美联储","英伟达财�
 riskWarning: 仅从情绪角度提示风险（如"情绪过于一致，反转概率升高"），不评价群成员。
 
 【辅助 - 资产识别】
-topAssets: 只挑出讨论最热、提及最多的最多 5 个资产，不要全部列举。
+topAssets: 只挑出讨论最热、提及最多的最多 3 个资产，不要全部列举。
 参考俗称：${loadAssetHints()}、药哥=辉瑞、ES=标普500期货、NQ=纳指期货等。
 每个资产返回：nickname（群里叫法）、name（正式名称）、ticker（交易代码）、exchange。
 不确定代码 ticker 填"未知"。
@@ -349,13 +366,13 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
     const raw = await chat(
       system,
       `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
-      2000,
+      3500,
     );
     const json = parseJSON(raw);
     const topAssets = Array.isArray(json.topAssets)
-      ? json.topAssets.slice(0, 5)
+      ? json.topAssets.slice(0, 3)
       : Array.isArray(json.assets)
-        ? json.assets.slice(0, 5)
+        ? json.assets.slice(0, 3)
         : [];
     return {
       score: Math.max(-1, Math.min(1, json.score)),
