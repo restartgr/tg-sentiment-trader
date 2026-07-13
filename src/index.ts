@@ -14,6 +14,7 @@ import {
 import {
   createTelegramClient,
   getSenderName,
+  isOwnMessage,
   normalizeTelegramId,
   readSessionString,
   resolveGroup,
@@ -113,22 +114,10 @@ function formatAssetDetail(detail: AssetDetailAnalysis): string {
 function formatQuickScore(result: BatchScoreResult): string {
   const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
 
-  const assetsStr = result.topAssets.length
-    ? `\n🗣️ 聊得最多：\n` +
-      result.topAssets
-        .map((a) => {
-          const code = a.ticker && a.ticker !== "未知" ? `(${a.ticker})` : "";
-          const topic = a.topic ? `：${a.topic}` : "";
-          return `  • ${a.nickname}${code}${topic}`;
-        })
-        .join("\n")
-    : "";
-
   return [
     `${emoji} 情绪总览：${result.label} (${(result.score * 100).toFixed(0)}%)`,
     result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
     `💬 ${result.comment}`,
-    assetsStr,
     `🧭 日常波动，暂不深入分析。`,
   ]
     .filter(Boolean)
@@ -265,7 +254,13 @@ async function main() {
         await sendToSavedMessages(client, formatAssetDetail(detail));
       }
     } catch (err) {
+      // 不把解析失败当成中性数据：明确报错，不产生假的情绪读数。
       console.error("批量分析失败:", err);
+      const reason = err instanceof Error ? err.message : String(err);
+      await sendToSavedMessages(
+        client,
+        `⚠️ 本批情绪分析解析失败，已跳过（不计入情绪读数）。\n原因：${reason}`,
+      );
     }
   }
 
@@ -278,7 +273,15 @@ async function main() {
     try {
       const allMessages = await client.getMessages(groupEntity, { limit: 200 });
       const todayMessages = allMessages
-        .filter((m) => m.date * 1000 >= todayStart.getTime() && m.text?.trim())
+        .filter(
+          (m) =>
+            m.date * 1000 >= todayStart.getTime() &&
+            m.text?.trim() &&
+            !(
+              config.telegram.excludeSelf &&
+              isOwnMessage(m, config.telegram.myUserId)
+            ),
+        )
         .reverse();
 
       console.log(`   今日消息 ${todayMessages.length} 条`);
@@ -311,6 +314,10 @@ async function main() {
     async (event: NewMessageEvent) => {
       const message = event.message;
       if (!message.text) return;
+
+      // 剔除自己的发言，避免自我干扰情绪分析。
+      if (config.telegram.excludeSelf && isOwnMessage(message, config.telegram.myUserId))
+        return;
 
       const chatId = message.chatId?.toString();
       if (!chatId || !targetGroupIds.has(normalizeTelegramId(chatId))) return;

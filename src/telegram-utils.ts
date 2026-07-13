@@ -4,14 +4,22 @@ import { StringSession } from "telegram/sessions";
 import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import timezone from "dayjs/plugin/timezone";
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 dotenv.config();
 
 export const SESSION_FILE = path.join(process.cwd(), "session.txt");
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-const DEFAULT_OPEN_UTC_MIN = 0; // 09:00 JST
-const DEFAULT_CLOSE_UTC_MIN = 6 * 60; // 15:00 JST
+const JST_TZ = "Asia/Tokyo";
+const DAY_MS = 24 * 60 * 60 * 1000;
+// 交易时段：09:00–15:00 JST。
+const DEFAULT_OPEN_MIN = 9 * 60;
+const DEFAULT_CLOSE_MIN = 15 * 60;
 
 export function readSessionString(): string {
   if (!fs.existsSync(SESSION_FILE)) return "";
@@ -90,6 +98,16 @@ export async function sendToSavedMessages(
   await client.sendMessage("me", { message });
 }
 
+// 判断是否是自己发的消息：优先用 Telegram 的 out 标记，退回比对 senderId。
+export function isOwnMessage(
+  message: Pick<Api.Message, "out" | "senderId">,
+  myUserId: number,
+): boolean {
+  if (message.out) return true;
+  const senderId = message.senderId?.toString();
+  return senderId != null && senderId === myUserId.toString();
+}
+
 export async function getSenderName(
   message: Pick<Api.Message, "getSender">,
 ): Promise<string> {
@@ -100,45 +118,32 @@ export async function getSenderName(
   return "匿名";
 }
 
+// 当前时刻所在「JST 自然日」的 00:00，返回该瞬间的真实 UTC 时间。
 export function todayJSTStart(): Date {
-  const now = new Date();
-  const jstMidnight = new Date(now);
-  jstMidnight.setUTCHours(15, 0, 0, 0);
-  if (now.getUTCHours() < 15) {
-    jstMidnight.setUTCDate(jstMidnight.getUTCDate() - 1);
-  }
-  return jstMidnight;
+  return dayjs().tz(JST_TZ).startOf("day").toDate();
 }
 
 export function todayJSTRange(): { start: number; end: number } {
   const start = todayJSTStart().getTime();
-  return { start, end: start + 24 * 60 * 60 * 1000 };
+  return { start, end: start + DAY_MS };
 }
 
 export function formatJSTDateLabel(dayStartMs: number): string {
-  return new Date(dayStartMs + JST_OFFSET_MS).toLocaleDateString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
+  return dayjs(dayStartMs).tz(JST_TZ).format("YYYY/MM/DD");
 }
 
 export function formatJSTTime(unixSec: number): string {
-  return new Date(unixSec * 1000).toLocaleTimeString("zh-CN", {
-    timeZone: "Asia/Tokyo",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return dayjs.unix(unixSec).tz(JST_TZ).format("HH:mm");
 }
 
 export function inJSTTradingHours(
   unixSec: number,
-  openUtcMin = DEFAULT_OPEN_UTC_MIN,
-  closeUtcMin = DEFAULT_CLOSE_UTC_MIN,
+  openMin = DEFAULT_OPEN_MIN,
+  closeMin = DEFAULT_CLOSE_MIN,
 ): boolean {
-  const d = new Date(unixSec * 1000);
-  const min = d.getUTCHours() * 60 + d.getUTCMinutes();
-  return min >= openUtcMin && min < closeUtcMin;
+  const jst = dayjs.unix(unixSec).tz(JST_TZ);
+  const min = jst.hour() * 60 + jst.minute();
+  return min >= openMin && min < closeMin;
 }
 
 export async function fetchMessagesSince(

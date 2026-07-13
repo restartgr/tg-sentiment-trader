@@ -91,7 +91,7 @@ function parseJSON(raw: string): any {
     // 值中未转义的裸双引号 -> 单引号
     (s: string) =>
       s.replace(
-        /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+        /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
         (_m, open, value, close) =>
           open + value.replace(/(?<!\\)"/g, "'") + close,
       ),
@@ -100,7 +100,7 @@ function parseJSON(raw: string): any {
       s
         .replace(/,(\s*[}\]])/g, "$1")
         .replace(
-          /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+          /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
           (_m, open, value, close) =>
             open + value.replace(/(?<!\\)"/g, "'") + close,
         ),
@@ -180,22 +180,13 @@ export interface BatchAnalysisResult {
   signal: string;
 }
 
-// 第一轮初筛里顺手带出的「聊得最多的资产」，只做识别，不做行情/点位判断。
-export interface QuickAsset {
-  nickname: string; // 群里的叫法（原文怎么称呼就怎么写）
-  ticker: string; // 交易代码，拿不准填"未知"
-  topic: string; // 一句话：大家在聊它什么
-}
-
-// 初筛只带 Top3，够看清群里在聊什么即可，重了就失去 light 轮的意义。
-const QUICK_TOP_ASSET_COUNT = 3;
-
+// 初筛轮只做最轻量的情绪打分：分数 + 主导情绪 + 一句点评。
+// 资产识别/行情/点位等重活留给达标后的深度轮 analyzeBatch，避免每个 batch 都白跑。
 export interface BatchScoreResult {
   score: number;
   label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
   dominantEmotion: string;
   comment: string;
-  topAssets: QuickAsset[]; // 聊得最多的前 3 个资产
 }
 
 export interface AssetDetailAnalysis {
@@ -213,7 +204,7 @@ export async function analyzeBatchScore(
   messages: { username: string; text: string }[],
 ): Promise<BatchScoreResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
-  const system = `你是散户投机群的轻量情绪评分器。判断这批消息的群体情绪强度，并识别当前聊得最多的资产。不做行情、新闻、技术分析，不编造任何价位。
+  const system = `你是散户投机群的轻量情绪评分器。只判断这批消息的群体情绪强度，不识别资产、不做行情/新闻/技术分析、不编造任何价位。输出务必极简。
 
 【关键判别】
 - 先判断痛苦/亢奋来自多头还是空头，不要只看"跌懵了""求放过""完了"这类字面词。
@@ -237,50 +228,31 @@ export async function analyzeBatchScore(
 - -0.5 ~ -0.65：明显悲观（一群人形成看空/割肉气氛）
 - -0.65 ~ -1.0：极度恐慌、割肉、崩溃或绝望
 
-comment 写一句很短的中文点评，低于 30 字，不要给交易建议。
-
-【聊得最多的资产】
-从这批消息里挑出被提及、讨论最多的最多 ${QUICK_TOP_ASSET_COUNT} 个资产，按热度从高到低：
-- nickname：群里的叫法，原文怎么称呼就怎么写。
-- ticker：交易代码，能对上就填，拿不准填"未知"，绝不编造。
-- topic：一句话（≤20字）说明大家在聊它什么，只描述讨论内容/情绪，不给点位、不做买卖建议。
-参考俗称：${loadAssetHints()}、药哥=辉瑞、ES=标普500期货、NQ=纳指期货等。
-如果这批消息没聊到具体资产，topAssets 返回空数组 []。
+dominantEmotion 用一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/麻木/嘲讽 等）。
+comment 写一句很短的中文点评，低于 30 字，说明哪一边情绪更强，不要给交易建议。
 
 只返回JSON，不要其他文字：
-{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","comment":"一句话点评","topAssets":[{"nickname":"...","ticker":"...","topic":"..."}]}`;
+{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","comment":"一句话点评"}`;
 
   try {
     const raw = await chat(
       system,
       `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
-      2000,
+      300,
       "light",
     );
     const json = parseJSON(raw);
-    const topAssets: QuickAsset[] = Array.isArray(json.topAssets)
-      ? json.topAssets.slice(0, QUICK_TOP_ASSET_COUNT).map((a: any) => ({
-          nickname: a.nickname ?? "",
-          ticker: a.ticker ?? "未知",
-          topic: a.topic ?? "",
-        }))
-      : [];
     return {
       score: Math.max(-1, Math.min(1, json.score)),
       label: json.label ?? "中性",
       dominantEmotion: json.dominantEmotion ?? "",
       comment: json.comment ?? "情绪暂无明显极端变化。",
-      topAssets,
     };
   } catch (e) {
-    console.error("轻量情绪评分失败:", e);
-    return {
-      score: 0,
-      label: "中性",
-      dominantEmotion: "",
-      comment: "轻量评分解析失败。",
-      topAssets: [],
-    };
+    // 不兜底成中性：解析失败会伪装成一次真实的「中性」读数，混进档位判断。
+    // 直接抛出，由调用方明确报「解析失败」。
+    console.error("轻量情绪评分解析失败:", e);
+    throw e;
   }
 }
 
@@ -389,21 +361,10 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
       signal: json.signal ?? "",
     };
   } catch (e) {
-    console.error("批量分析失败:", e);
-    return {
-      score: 0,
-      label: "中性",
-      topAssets: [],
-      dominantEmotion: "",
-      emotionDetail: "",
-      divergence: "",
-      crowdBehavior: "",
-      hotTopics: [],
-      riskWarning: "",
-      marketInsight: "",
-      summary: "解析失败",
-      signal: "",
-    };
+    // 不兜底成中性：解析失败若返回 score:0 会被当成一次真实的中性读数。
+    // 直接抛出，由调用方明确报「解析失败」。
+    console.error("批量分析解析失败:", e);
+    throw e;
   }
 }
 

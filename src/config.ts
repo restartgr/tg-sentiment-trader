@@ -44,6 +44,8 @@ export const config = {
     // 你自己的 Telegram user ID（用于接收提醒）
     myUserId: parseIntEnv("TG_MY_USER_ID"),
     bombTarget: process.env.TG_BOMB_TARGET ?? "",
+    // 是否把自己的发言从情绪分析里剔除（默认剔除，设 TG_EXCLUDE_SELF=false 关闭）
+    excludeSelf: (process.env.TG_EXCLUDE_SELF ?? "true").toLowerCase() !== "false",
   },
   llm: {
     apiKey: requireEnv("ANTHROPIC_API_KEY"),
