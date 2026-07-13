@@ -238,7 +238,7 @@ comment 写一句很短的中文点评，低于 30 字，说明哪一边情绪�
     const raw = await chat(
       system,
       `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
-      300,
+      1000,
       "light",
     );
     const json = parseJSON(raw);
