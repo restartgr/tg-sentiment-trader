@@ -412,32 +412,38 @@ async function main() {
         await sendToSavedMessages(client, formatAssetDetail(detail));
       }
     } catch (err) {
-      if (persistedBatchId === null) {
-        try {
-          saveBatch({
-            groupId,
-            messageIds,
-            startTime,
-            endTime,
-            quickScore: quickResult?.score ?? null,
-            finalScore: null,
-            initialTier,
-            finalTier: null,
-            dominantEmotion: quickResult?.dominantEmotion ?? "",
-            summary: quickResult?.comment ?? "",
-            marketInsight: "",
-            result: { quick: quickResult },
-            status: "failed",
-            errorMessage: err instanceof Error ? err.message : String(err),
-          });
-        } catch (dbErr) {
-          console.error("失败记录写入数据库失败:", dbErr);
-        }
+      const reason = err instanceof Error ? err.message : String(err);
+
+      // 已落库为 completed：分析本身成功，只是后续发送/单票详情等步骤出错。
+      // 不能发「分析失败」误导通知，也不能写 failed 记录，只记日志。
+      if (persistedBatchId !== null) {
+        console.error("分析已完成落库，但后续发送/单票步骤失败:", err);
+        return;
+      }
+
+      try {
+        saveBatch({
+          groupId,
+          messageIds,
+          startTime,
+          endTime,
+          quickScore: quickResult?.score ?? null,
+          finalScore: null,
+          initialTier,
+          finalTier: null,
+          dominantEmotion: quickResult?.dominantEmotion ?? "",
+          summary: quickResult?.comment ?? "",
+          marketInsight: "",
+          result: { quick: quickResult },
+          status: "failed",
+          errorMessage: reason,
+        });
+      } catch (dbErr) {
+        console.error("失败记录写入数据库失败:", dbErr);
       }
 
       // 不把解析失败当成中性数据：明确报错，不产生假的情绪读数。
       console.error("批量分析失败:", err);
-      const reason = err instanceof Error ? err.message : String(err);
       try {
         await sendToSavedMessages(
           client,
