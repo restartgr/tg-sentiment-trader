@@ -254,10 +254,15 @@ async function main() {
         status: "completed",
       });
 
-      await sendToSavedMessages(
-        client,
-        formatPreheatSummary(summary, buffer.length),
-      );
+      // 已落库为 completed，发送做成 best-effort：发送失败不能再写一条 failed 记录。
+      try {
+        await sendToSavedMessages(
+          client,
+          formatPreheatSummary(summary, buffer.length),
+        );
+      } catch (sendErr) {
+        console.error("预热总结发送失败:", sendErr);
+      }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       try {

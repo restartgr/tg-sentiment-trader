@@ -184,7 +184,11 @@ export function saveMessage(input: MessageInput): number {
     )
     .get(input.groupId, input.tgMessageId) as { id: number } | undefined;
 
-  if (!row) throw new Error("消息写入数据库后无法读取 ID");
+  if (!row) {
+    throw new Error(
+      `消息写入数据库后无法读取 ID (groupId=${input.groupId}, tgMessageId=${input.tgMessageId})`,
+    );
+  }
   return row.id;
 }
 
