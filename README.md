@@ -39,9 +39,35 @@ pnpm auth
 # 3.（可选）列出你加入的群，方便拿到群 username / chat id
 pnpm list-groups
 
-# 4. 启动实时监控
+# 4.（可选）提前初始化 SQLite；启动监控时也会自动初始化
+pnpm init-db
+
+# 5. 启动实时监控
 pnpm start          # 或 pnpm dev（带热重载）
 ```
+
+## 数据持久化
+
+监控数据保存在本地 SQLite 文件 `data/tg-sentiment.db`，不需要单独启动数据库服务。当前包含三张核心表：
+
+- `messages`：每条 Telegram 原始消息，使用 `group_id + tg_message_id` 去重。
+- `batches`：一次情绪分析的分数、档位、摘要、结果和状态。
+- `batch_messages`：记录一次分析具体使用了哪些消息。
+
+消息到达后会先写入 `messages`，再进入内存 batch。原始消息通过 Telegram ID 幂等写入，不会因为重启而重复；每次启动会为当天全部消息新增一次 `preheat` 总结快照，启动后的实时消息才按 batch size 分析。`data/` 默认不会提交到 Git。
+
+不需要手写 SQL 就能检查数据库：
+
+```bash
+pnpm db:inspect
+```
+
+该命令通过 `db.ts` 的查询函数显示数据量、最近消息和最近分析批次。查询层目前提供：
+
+- `getRecentMessages()`：读取最近消息。
+- `searchMessages()`：按群组、关键词和时间范围搜索。
+- `getBatchesInRange()`：读取指定范围的分析结果。
+- `getDatabaseStats()`：统计消息、批次和关联数量。
 
 ### 资产俗称映射（可选但推荐）
 
@@ -80,6 +106,8 @@ pnpm start          # 或 pnpm dev（带热重载）
 | `pnpm auth` | 登录 Telegram，生成 `session.txt` |
 | `pnpm list-groups` | 列出已加入的群组及其 id |
 | `pnpm start` / `pnpm dev` | 启动实时情绪监控（`dev` 带热重载） |
+| `pnpm init-db` | 初始化本地 SQLite 数据库 |
+| `pnpm db:inspect` | 查看 SQLite 数据概览、最近消息和分析批次 |
 | `pnpm panic` | 生成鬼叫指数日报 |
 | `pnpm build` | TypeScript 编译到 `dist/` |
 

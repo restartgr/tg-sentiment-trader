@@ -1,6 +1,12 @@
-import { TelegramClient } from "telegram";
+import { Api, TelegramClient } from "telegram";
 import { NewMessage, NewMessageEvent } from "telegram/events";
 import { config } from "./config";
+import {
+  hasCompletedAnalysis,
+  initDatabase,
+  saveBatch,
+  saveMessage,
+} from "./db";
 import {
   analyzeAssetDetail,
   analyzeBatch,
@@ -13,6 +19,7 @@ import {
 } from "./analyzer";
 import {
   createTelegramClient,
+  fetchMessagesSince,
   getSenderName,
   isOwnMessage,
   normalizeTelegramId,
@@ -23,8 +30,10 @@ import {
 } from "./telegram-utils";
 
 interface BufferedMessage {
+  dbId: number;
   username: string;
   text: string;
+  messageTs: number;
 }
 
 type AnalysisTier = "simple" | "monitor" | "detail";
@@ -124,6 +133,22 @@ function formatQuickScore(result: BatchScoreResult): string {
     .join("\n");
 }
 
+function formatPreheatSummary(
+  result: BatchScoreResult,
+  messageCount: number,
+): string {
+  const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
+
+  return [
+    `📋 今日预热总结（${messageCount} 条消息）`,
+    `${emoji} 整体情绪：${result.label} (${(result.score * 100).toFixed(0)}%)`,
+    result.dominantEmotion ? `🎭 主导情绪：${result.dominantEmotion}` : "",
+    `💬 ${result.comment}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function formatDowngradedAnalysis(
   result: BatchAnalysisResult,
   initialRule: TierRule,
@@ -140,11 +165,50 @@ function formatDowngradedAnalysis(
     .join("\n");
 }
 
+async function persistTelegramMessage(
+  message: Api.Message,
+  groupId: string,
+): Promise<BufferedMessage> {
+  const username = await getSenderName(message);
+  const text = message.text!.trim();
+  const dbId = saveMessage({
+    tgMessageId: message.id,
+    groupId,
+    senderId: message.senderId?.toString() ?? null,
+    username,
+    text,
+    messageTs: message.date * 1000,
+  });
+
+  return {
+    dbId,
+    username,
+    text,
+    messageTs: message.date * 1000,
+  };
+}
+
+function getBatchTimeRange(buffer: BufferedMessage[]): {
+  startTime: number;
+  endTime: number;
+} {
+  return buffer.reduce(
+    (range, message) => ({
+      startTime: Math.min(range.startTime, message.messageTs),
+      endTime: Math.max(range.endTime, message.messageTs),
+    }),
+    { startTime: buffer[0].messageTs, endTime: buffer[0].messageTs },
+  );
+}
+
 async function main() {
   if (!readSessionString()) {
     console.error("❌ 未找到 session，请先运行: pnpm auth");
     process.exit(1);
   }
+
+  initDatabase();
+  console.log("🗄️ SQLite 数据库已就绪");
 
   const client: TelegramClient = createTelegramClient();
 
@@ -164,15 +228,94 @@ async function main() {
 
   const messageBuffers = new Map<string, BufferedMessage[]>();
 
+  async function runPreheatSummary(
+    groupId: string,
+    buffer: BufferedMessage[],
+  ): Promise<void> {
+    const { startTime, endTime } = getBatchTimeRange(buffer);
+    const messageIds = buffer.map((message) => message.dbId);
+
+    try {
+      // 预热只调用一次轻量总结，不进入实时档位、行情或单票分析流程。
+      const summary = await analyzeBatchScore(buffer);
+      saveBatch({
+        groupId,
+        messageIds,
+        startTime,
+        endTime,
+        quickScore: summary.score,
+        finalScore: null,
+        initialTier: "preheat",
+        finalTier: "preheat",
+        dominantEmotion: summary.dominantEmotion,
+        summary: summary.comment,
+        marketInsight: "",
+        result: { preheat: summary },
+        status: "completed",
+      });
+
+      await sendToSavedMessages(
+        client,
+        formatPreheatSummary(summary, buffer.length),
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      try {
+        saveBatch({
+          groupId,
+          messageIds,
+          startTime,
+          endTime,
+          quickScore: null,
+          finalScore: null,
+          initialTier: "preheat",
+          finalTier: null,
+          dominantEmotion: "",
+          summary: "",
+          marketInsight: "",
+          result: {},
+          status: "failed",
+          errorMessage: reason,
+        });
+      } catch (dbErr) {
+        console.error("预热失败记录写入数据库失败:", dbErr);
+      }
+      console.error("预热总结失败:", err);
+    }
+  }
+
   async function runBatchAnalysis(groupId: string, buffer: BufferedMessage[]) {
+    const { startTime, endTime } = getBatchTimeRange(buffer);
+    const messageIds = buffer.map((message) => message.dbId);
+    let quickResult: BatchScoreResult | null = null;
+    let initialTier: AnalysisTier | null = null;
+    let persistedBatchId: number | null = null;
+
     try {
       const quick = await analyzeBatchScore(buffer);
+      quickResult = quick;
       const quickAbsScore = Math.abs(quick.score);
 
       const rule = resolveTier(quickAbsScore);
+      initialTier = rule?.tier ?? null;
 
       // 未达最低档（默认 < 0.5）：只发轻量总览
       if (!rule) {
+        persistedBatchId = saveBatch({
+          groupId,
+          messageIds,
+          startTime,
+          endTime,
+          quickScore: quick.score,
+          finalScore: null,
+          initialTier: null,
+          finalTier: "quick",
+          dominantEmotion: quick.dominantEmotion,
+          summary: quick.comment,
+          marketInsight: "",
+          result: { quick },
+          status: "completed",
+        });
         console.log(
           `📎 轻量总览完成 | ${quick.label}(${quick.score.toFixed(2)}) | ${quick.comment}`,
         );
@@ -186,6 +329,21 @@ async function main() {
         : NO_MARKET_CONTEXT;
       const result = await analyzeBatch(buffer, marketContext);
       const effectiveRule = resolveEffectiveTier(rule, result.score);
+      persistedBatchId = saveBatch({
+        groupId,
+        messageIds,
+        startTime,
+        endTime,
+        quickScore: quick.score,
+        finalScore: result.score,
+        initialTier: rule.tier,
+        finalTier: effectiveRule?.tier ?? "quick",
+        dominantEmotion: result.dominantEmotion,
+        summary: result.summary,
+        marketInsight: result.marketInsight,
+        result: { quick, analysis: result },
+        status: "completed",
+      });
       const assetsShort =
         result.topAssets.map((a) => `${a.nickname}(${a.ticker})`).join(", ") ||
         "无";
@@ -254,13 +412,40 @@ async function main() {
         await sendToSavedMessages(client, formatAssetDetail(detail));
       }
     } catch (err) {
+      if (persistedBatchId === null) {
+        try {
+          saveBatch({
+            groupId,
+            messageIds,
+            startTime,
+            endTime,
+            quickScore: quickResult?.score ?? null,
+            finalScore: null,
+            initialTier,
+            finalTier: null,
+            dominantEmotion: quickResult?.dominantEmotion ?? "",
+            summary: quickResult?.comment ?? "",
+            marketInsight: "",
+            result: { quick: quickResult },
+            status: "failed",
+            errorMessage: err instanceof Error ? err.message : String(err),
+          });
+        } catch (dbErr) {
+          console.error("失败记录写入数据库失败:", dbErr);
+        }
+      }
+
       // 不把解析失败当成中性数据：明确报错，不产生假的情绪读数。
       console.error("批量分析失败:", err);
       const reason = err instanceof Error ? err.message : String(err);
-      await sendToSavedMessages(
-        client,
-        `⚠️ 本批情绪分析解析失败，已跳过（不计入情绪读数）。\n原因：${reason}`,
-      );
+      try {
+        await sendToSavedMessages(
+          client,
+          `⚠️ 本批情绪分析失败，已跳过（不计入情绪读数）。\n原因：${reason}`,
+        );
+      } catch (sendErr) {
+        console.error("分析失败通知发送失败:", sendErr);
+      }
     }
   }
 
@@ -271,7 +456,11 @@ async function main() {
   for (const groupEntity of targetGroupEntities) {
     const groupId = normalizeTelegramId(groupEntity.id.toString());
     try {
-      const allMessages = await client.getMessages(groupEntity, { limit: 200 });
+      const allMessages = await fetchMessagesSince(
+        client,
+        groupEntity,
+        todayStart.getTime(),
+      );
       const todayMessages = allMessages
         .filter(
           (m) =>
@@ -288,19 +477,17 @@ async function main() {
 
       const buffer: BufferedMessage[] = [];
       for (const msg of todayMessages) {
-        const name = await getSenderName(msg);
-        const text = msg.text!.trim();
-        buffer.push({ username: name, text });
+        const storedMessage = await persistTelegramMessage(msg, groupId);
+        buffer.push(storedMessage);
       }
 
-      if (buffer.length >= config.sentiment.batchSize) {
-        await runBatchAnalysis(groupId, buffer);
+      // 启动预热只看一次全天总结；实时监听才按 batchSize 进入完整 workflow。
+      if (buffer.length > 0) {
+        await runPreheatSummary(groupId, buffer);
         messageBuffers.set(groupId, []);
       } else {
         messageBuffers.set(groupId, buffer);
-        console.log(
-          `   缓冲 ${buffer.length} 条，等待凑满 ${config.sentiment.batchSize} 条`,
-        );
+        console.log("   今日没有待分析消息");
       }
     } catch (err) {
       console.error("   ⚠️ 拉取历史失败:", err);
@@ -322,15 +509,21 @@ async function main() {
       const chatId = message.chatId?.toString();
       if (!chatId || !targetGroupIds.has(normalizeTelegramId(chatId))) return;
 
-      const name = await getSenderName(message);
-      const text = message.text.trim();
       const groupId = normalizeTelegramId(chatId);
+      const storedMessage = await persistTelegramMessage(message, groupId);
 
       if (!messageBuffers.has(groupId)) messageBuffers.set(groupId, []);
       const buffer = messageBuffers.get(groupId)!;
-      buffer.push({ username: name, text });
+      if (
+        hasCompletedAnalysis(storedMessage.dbId) ||
+        buffer.some((item) => item.dbId === storedMessage.dbId)
+      ) {
+        return;
+      }
+
+      buffer.push(storedMessage);
       console.log(
-        `📨 [${name}] ${text.slice(0, 50)}${text.length > 50 ? "..." : ""} (${buffer.length}/${config.sentiment.batchSize})`,
+        `📨 [${storedMessage.username}] ${storedMessage.text.slice(0, 50)}${storedMessage.text.length > 50 ? "..." : ""} (${buffer.length}/${config.sentiment.batchSize})`,
       );
 
       if (buffer.length >= config.sentiment.batchSize) {
