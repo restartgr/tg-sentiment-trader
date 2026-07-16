@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { config } from "./config";
 import { buildAssetMarketContext, buildMarketContext } from "./market-data";
+import { coerceHeatDriver, HeatDriver } from "./routing";
 
 interface AssetConfig {
   nickname: string;
@@ -91,7 +92,7 @@ function parseJSON(raw: string): any {
     // 值中未转义的裸双引号 -> 单引号
     (s: string) =>
       s.replace(
-        /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+        /("(?:quote|topQuote|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
         (_m, open, value, close) =>
           open + value.replace(/(?<!\\)"/g, "'") + close,
       ),
@@ -100,7 +101,7 @@ function parseJSON(raw: string): any {
       s
         .replace(/,(\s*[}\]])/g, "$1")
         .replace(
-          /("(?:quote|topQuote|summary|phaseAnalysis|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+          /("(?:quote|topQuote|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
           (_m, open, value, close) =>
             open + value.replace(/(?<!\\)"/g, "'") + close,
         ),
@@ -166,7 +167,9 @@ export interface AssetInfo {
 }
 
 export interface BatchAnalysisResult {
-  score: number;
+  score: number; // 方向轴：看涨(+) / 看跌(-)
+  heat: number; // 烈度轴：0~1，群体情绪激烈程度，与方向无关
+  heatDriver: HeatDriver; // 烈度来源，凭消息证据判断，只解释来源不替代 score 定方向
   label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
   topAssets: AssetInfo[]; // 最多 5 个最热资产
   dominantEmotion: string; // 主导情绪（恐慌/亢奋/迷茫/分歧/麻木/嘲讽 等）
@@ -183,7 +186,9 @@ export interface BatchAnalysisResult {
 // 初筛轮只做最轻量的情绪打分：分数 + 主导情绪 + 一句点评。
 // 资产识别/行情/点位等重活留给达标后的深度轮 analyzeBatch，避免每个 batch 都白跑。
 export interface BatchScoreResult {
-  score: number;
+  score: number; // 方向轴：看涨(+) / 看跌(-)，只看与股票/持仓/行情有关的有效发言
+  heat: number; // 烈度轴：0~1，群体情绪激烈程度，看全部消息（含与股票无关的争吵）
+  heatDriver: HeatDriver; // 烈度来源，凭消息证据判断，只解释来源不替代 score 定方向
   label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
   dominantEmotion: string;
   comment: string;
@@ -202,9 +207,25 @@ export interface AssetDetailAnalysis {
 
 export async function analyzeBatchScore(
   messages: { username: string; text: string }[],
+  paceNote = "",
 ): Promise<BatchScoreResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
-  const system = `你是散户投机群的轻量情绪评分器。只判断这批消息的群体情绪强度，不识别资产、不做行情/新闻/技术分析、不编造任何价位。输出务必极简。
+  const system = `你是散户投机群的轻量情绪评分器。判断这批消息的群体情绪，输出两根相互独立的轴：方向(score) 和 烈度(heat)。不识别资产、不做行情/新闻/技术分析、不编造任何价位。输出务必极简。
+
+【两根轴，务必分开判断】
+- score（方向轴，-1~+1）：群体是看涨还是看跌。多空分歧僵持 → 落在中性区 -0.2~+0.2。
+- heat（烈度轴，0~1）：群体情绪有多激烈/极端，跟方向无关。吵架、对骂、集体破防、疯狂刷屏、亢奋梭哈、绝望割肉、激烈对喷，都算高烈度。
+- 关键：吵架 / 激烈多空对喷 / 情绪爆发 时，score 可能因为方向分歧而接近中性，但 heat 必须打高（≥0.6），不要因为方向不明就把整体情绪判成平淡。
+- 群聊节奏（发言密度）只是辅助证据：高频只代表活跃，不等于激烈。高频但冷静、理性的技术讨论仍应保持低 heat；只有高频同时伴随激烈措辞、冲突、恐慌或亢奋，才明显提高 heat。
+
+【heatDriver - 烈度来源，务必凭消息证据，只解释来源，不替代 score 定方向】
+判断这批消息的高烈度主要由什么引起，收敛为四类：
+- 上涨：有明确文本证据说明情绪由上涨、踏空或追高引起。
+- 下跌：有明确文本证据说明情绪由下跌、套牢或割肉引起。
+- 多空分歧：围绕市场发生激烈争论，但没有一致方向。
+- 其他或不明：非市场争吵，或缺少证据判断来源。
+- 证据不足必须返回"其他或不明"，禁止默认猜测涨跌（不许因为"散户吵架通常是跌"就猜下跌）。
+- 看涨/看跌仍由 score 决定；heatDriver 只说明烈度来源。
 
 【关键判别】
 - 先判断痛苦/亢奋来自多头还是空头，不要只看"跌懵了""求放过""完了"这类字面词。
@@ -213,11 +234,16 @@ export async function analyzeBatchScore(
 - 如果多头说"亏麻了/割肉/崩了/跌死了"，才偏悲观。
 - comment 必须说明是哪一边情绪更强，例如"空头被拉升打痛"或"多头恐慌割肉"。
 
-【打分方式，非常重要】
-- 先把闲聊、灌水、问路、表情包这类背景噪音剔掉，只看真正表达了市场方向/情绪的消息，别让噪音把分数稀释到中性。
+【score 打分方式（只用于方向轴）】
+- 先把闲聊、灌水、问路、表情包这类背景噪音剔掉，只看真正表达了市场方向/情绪的消息，别让噪音把 score 稀释到中性。
 - 在这些"有效消息"里判断主导方向：如果相当一部分人（不是一两条孤立发言，而是形成了气氛）在看涨/看跌/恐慌/亢奋，就把分数拉向对应方向。
 - 少数几条孤立的极端发言，若没被其他人呼应、没形成群体气氛，不足以定调，按轻微档处理即可。
 - 落在中性区（-0.2~+0.2），要么是有效消息里多空分歧僵持，要么是整批基本没人表达明确方向。
+
+【heat 打分方式（烈度轴，务必用全部消息，不要剔噪音）】
+- heat 判断的是全群情绪温度，不管发言是否在聊股票。吵架、对骂、互喷、情绪宣泄、疯狂刷屏、连环追问、集体破防——即使完全没提任何标的，也全部计入烈度。
+- 恰恰在吵架/激烈情绪时，大家往往不聊具体股票，所以给 score 剔掉的那些"无关发言"，正是 heat 的关键信号，绝不能忽略。
+- 只有当这些非市场发言是平静的（打招呼、贴表情包、日常闲扯、没火药味），heat 才低。有火药味/情绪爆发就要打高。
 
 评分规则：
 - +0.65 ~ +1.0：极度亢奋、疯狂看涨、追涨或梭哈
@@ -228,22 +254,30 @@ export async function analyzeBatchScore(
 - -0.5 ~ -0.65：明显悲观（一群人形成看空/割肉气氛）
 - -0.65 ~ -1.0：极度恐慌、割肉、崩溃或绝望
 
-dominantEmotion 用一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/麻木/嘲讽 等）。
-comment 写一句很短的中文点评，低于 30 字，说明哪一边情绪更强，不要给交易建议。
+heat 评分参考：
+- 0.0~0.3：平淡，零星发言或闲聊灌水
+- 0.3~0.6：有一定情绪但未爆发
+- 0.6~0.85：情绪激烈，吵架/对喷/集体亢奋或恐慌
+- 0.85~1.0：全群炸锅、疯狂刷屏、极端破防
+
+dominantEmotion 用一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/争吵/麻木/嘲讽 等）。
+comment 写一句很短的中文点评，低于 30 字，说明方向与烈度（哪一边情绪更强、是否在吵），不要给交易建议。
 
 只返回JSON，不要其他文字：
-{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","comment":"一句话点评"}`;
+{"score":0.0,"heat":0.0,"heatDriver":"上涨|下跌|多空分歧|其他或不明","label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","comment":"一句话点评"}`;
 
   try {
     const raw = await chat(
       system,
-      `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
+      `${paceNote ? `${paceNote}\n\n` : ""}以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
       1000,
       "light",
     );
     const json = parseJSON(raw);
     return {
       score: Math.max(-1, Math.min(1, json.score)),
+      heat: Math.max(0, Math.min(1, json.heat ?? 0)),
+      heatDriver: coerceHeatDriver(json.heatDriver),
       label: json.label ?? "中性",
       dominantEmotion: json.dominantEmotion ?? "",
       comment: json.comment ?? "情绪暂无明显极端变化。",
@@ -270,6 +304,7 @@ export async function buildBatchMarketContext(
 export async function analyzeBatch(
   messages: { username: string; text: string }[],
   marketContext: string,
+  paceNote = "",
 ): Promise<BatchAnalysisResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
   const system = `你是散户投机群的情绪分析器，同时精通全球股票、期货、加密货币的代码和俗称。
@@ -284,7 +319,10 @@ export async function analyzeBatch(
 - 多头喊"亏麻了""割肉""崩了""跌死了"才更可能代表市场悲观/多头恐慌。
 - comment、emotionDetail、crowdBehavior 中要写清楚是"空头痛苦"、"多头恐慌"还是"多空分歧"。
 
-评分规则：
+【两根轴，务必分开判断】
+score（方向轴）判断看涨/看跌，heat（烈度轴，0~1）判断情绪有多激烈，两者独立。吵架/激烈多空对喷/集体破防时，score 可能因分歧接近中性，但 heat 必须打高（≥0.6）。
+
+score 评分规则：
 - +0.65 ~ +1.0：群体极度亢奋，疯狂看涨
 - +0.5 ~ +0.65：整体明显乐观
 - +0.2 ~ +0.5：整体轻微乐观
@@ -293,13 +331,26 @@ export async function analyzeBatch(
 - -0.5 ~ -0.65：整体明显悲观
 - -0.65 ~ -1.0：群体极度恐慌，割肉跑路
 
+heat 评分规则：
+- 0.0~0.3：平淡；0.3~0.6：有情绪未爆发；0.6~0.85：吵架/对喷/亢奋或恐慌；0.85~1.0：全群炸锅、极端破防
+- 群聊节奏（发言密度）只是辅助证据：高频只代表活跃，不等于激烈。高频但冷静、理性的技术讨论仍应保持低 heat；只有高频同时伴随激烈措辞、冲突、恐慌或亢奋，才明显提高 heat。
+- heat 看全群情绪温度，务必把跟股票无关的吵架、对骂、情绪宣泄、刷屏也计入；吵架时大家常常不聊标的，这些"无关发言"正是烈度信号。只有平静的日常闲扯才算低烈度。
+
+heatDriver（烈度来源，务必凭消息证据，只解释来源，不替代 score 定方向）：
+- 上涨：有明确文本证据说明情绪由上涨、踏空或追高引起。
+- 下跌：有明确文本证据说明情绪由下跌、套牢或割肉引起。
+- 多空分歧：围绕市场发生激烈争论，但没有一致方向。
+- 其他或不明：非市场争吵，或缺少证据判断来源。
+- 证据不足必须返回"其他或不明"，禁止默认猜测涨跌（不许因为"散户吵架通常是跌"就猜下跌）。
+- 看涨/看跌仍由 score 决定；heatDriver 只说明烈度来源。
+
 【重点 - 情绪分析】
 dominantEmotion: 一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/麻木/FOMO/绝望/侥幸/狂热/犹豫 等）
 emotionDetail: 2-3 句话客观描述情绪状态本身，只观察情绪倾向和强度变化，不评价人的能力、性格、智商，不贴标签骂人。例：'多数人对反弹持怀疑，担忧二次探底；少部分人情绪转向乐观但带犹豫'。
 divergence: 描述多空分歧或共识程度（如"高度一致看空"/"多空分歧明显"/"情绪由空转多"），只说情绪状态，不评价人。
 crowdBehavior: 描述群体的情绪反应模式，只说情绪行为（如"追涨情绪上升"/"恐慌情绪蔓延"/"观望情绪占主导"/"FOMO情绪抬头"），禁止使用'嘴硬''被套装死''独立判断弱''盲从''韭菜'等带贬义/评判的措辞。
 hotTopics: 讨论焦点关键词，最多 5 个（如["美联储","英伟达财报","抄底","止损"]）
-riskWarning: 仅从情绪角度提示风险（如"情绪过于一致，反转概率升高"），不评价群成员。
+riskWarning: 仅从情绪角度提示风险（如"情绪过于一致，反转概率升高"/"发言密集情绪过热，警惕反向"），不评价群成员。
 
 【辅助 - 资产识别】
 topAssets: 只挑出讨论最热、提及最多的最多 3 个资产，不要全部列举。
@@ -307,11 +358,14 @@ topAssets: 只挑出讨论最热、提及最多的最多 3 个资产，不要全
 每个资产返回：nickname（群里叫法）、name（正式名称）、ticker（交易代码）、exchange。
 不确定代码 ticker 填"未知"。
 
-signal：根据情绪质量判断操作方向。
-- 极端且一致（情绪化、无脑梭哈/割肉）→ 反向
-- 有理有据（带基本面/技术面分析）→ 跟随
-- 分歧或中性 → 观望
-内容需含：操作方向、理由、具体建议。
+signal：结合烈度(heat)和方向(score)判断操作方向，两者一起看。
+- 高烈度 + 方向极端一致（情绪化无脑梭哈/割肉、疯狂追涨杀跌）→ 反向（情绪过热，易反转）。
+- 高烈度 + 多空激烈分歧/吵架（方向中性但很热）→ 情绪过热、方向未定，倾向反向或严格观望等方向明朗，不要顺势追。
+- 低烈度 + 有理有据（带基本面/技术面分析）→ 跟随。
+- 低烈度 + 分歧或中性 → 观望。
+- 总体原则：发言越密集、越情绪化（heat 越高），越偏反向；理性、有依据、节奏平缓才考虑跟随。
+- 若 heatDriver 为"其他或不明"：判为观望，明确说明这是与行情无关（或来源不明）的情绪，不给任何交易方向或点位。
+内容需含：操作方向、理由（须点明当前烈度与发言节奏）、具体建议。
 如果 topAssets 不为空，signal 必须逐个覆盖 topAssets 中的每个资产，不要只写最热门的一个。
 signal 格式必须包含：
 【跟随/反向/观望】一句总判断；
@@ -332,12 +386,12 @@ signal 格式必须包含：
 marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近新闻、斐波那契回撤位置、ORB 开盘区间状态。只引用行情上下文提供的数据；新闻没取到就说新闻缺失；技术数据不足就说数据不足。
 
 只返回JSON，不要其他文字。字符串值内禁止使用英文双引号，请用单引号或中文引号：
-{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","emotionDetail":"...","divergence":"...","crowdBehavior":"...","hotTopics":["..."],"riskWarning":"...","marketInsight":"...","topAssets":[{"nickname":"...","name":"...","ticker":"...","exchange":"..."}],"summary":"一句话总结","signal":"【跟随/反向/观望】总判断\\n理由：...\\n已持仓者：\\n- 资产A：...\\n未持仓者：\\n- 资产A：..."}`;
+{"score":0.0,"heat":0.0,"heatDriver":"上涨|下跌|多空分歧|其他或不明","label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","emotionDetail":"...","divergence":"...","crowdBehavior":"...","hotTopics":["..."],"riskWarning":"...","marketInsight":"...","topAssets":[{"nickname":"...","name":"...","ticker":"...","exchange":"..."}],"summary":"一句话总结","signal":"【跟随/反向/观望】总判断\\n理由：...\\n已持仓者：\\n- 资产A：...\\n未持仓者：\\n- 资产A：..."}`;
 
   try {
     const raw = await chat(
       system,
-      `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
+      `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n${paceNote ? `${paceNote}\n\n` : ""}以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
       3500,
     );
     const json = parseJSON(raw);
@@ -348,6 +402,8 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
         : [];
     return {
       score: Math.max(-1, Math.min(1, json.score)),
+      heat: Math.max(0, Math.min(1, json.heat ?? 0)),
+      heatDriver: coerceHeatDriver(json.heatDriver),
       label: json.label,
       topAssets,
       dominantEmotion: json.dominantEmotion ?? "",
@@ -443,6 +499,79 @@ risk: 1句风险提示。
       risk: "数据异常，先不做交易判断。",
     };
   }
+}
+
+export interface DailySummaryResult {
+  score: number;
+  heat: number;
+  heatDriver: HeatDriver;
+  label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
+  dominantEmotion: string;
+  discussionSummary: string;
+  marketAnalysis: string;
+  sentimentVsMarket: string;
+  hotTopics: string[];
+  riskWarning: string;
+  summary: string;
+}
+
+export async function analyzeDailySummary(
+  messages: { username: string; text: string }[],
+  marketContext: string,
+  statsContext: string,
+): Promise<DailySummaryResult> {
+  const formatted = messages
+    .map((message) => `@${message.username}: ${message.text}`)
+    .join("\n");
+  const system = `你是市场群聊与大盘分析师。请基于今天 JST 09:00 截至当前的完整群聊和给定的大盘行情，生成一份今日综合总结。
+
+这不是鬼叫指数报告：不要统计鬼叫、炫耀或排行榜，不要评价具体群成员。暂不做个股详情、逐只个股技术分析或个股买卖建议。
+
+【普通讨论总结】
+- discussionSummary：概括今天大家主要讨论了什么，包括观点、信息、疑问和分歧，不要只挑极端情绪。
+- hotTopics：最多 5 个讨论主题，可以包含资产名称，但只列主题，不展开逐只个股分析。
+
+【三项情绪观察】
+- score（-1~+1）：市场方向轴，只根据与市场、持仓和行情有关的有效发言判断看涨/看跌；多空抵消时接近 0。
+- heat（0~1）：群体烈度轴，观察全部消息，包括与股票无关的争吵；消息多不等于烈度高，必须结合实际措辞。
+- heatDriver：烈度来源，只能是"上涨"、"下跌"、"多空分歧"、"其他或不明"。必须有文本证据，不能默认猜测涨跌。
+
+【大盘详细分析】
+- marketAnalysis：只依据提供的大盘行情上下文，详细说明指数涨跌、当前状态、ORB、斐波那契和新闻。数据缺失就明确写缺失，禁止使用记忆补充点位。
+- sentimentVsMarket：比较群聊情绪与真实大盘表现是一致、滞后还是背离，并说明依据。
+- riskWarning：只提示数据、情绪一致性和市场波动风险，不给具体买卖、反向、仓位或目标点位建议。
+
+summary 用 2-3 句话综合今天 JST 09:00 截至当前的群聊与大盘状态。所有内容仅用于观察，不构成投资建议。
+
+只返回 JSON，不要其他文字。字符串值内禁止使用英文双引号，请用单引号或中文引号：
+{"score":0.0,"heat":0.0,"heatDriver":"上涨|下跌|多空分歧|其他或不明","label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","discussionSummary":"...","marketAnalysis":"...","sentimentVsMarket":"...","hotTopics":["..."],"riskWarning":"...","summary":"..."}`;
+
+  const raw = await chat(
+    system,
+    `【今日消息统计】\n${statsContext}\n\n【大盘行情上下文】\n${marketContext}\n\n【今天 JST 09:00 截至当前的群消息，共 ${messages.length} 条】\n${formatted}`,
+    6000,
+    "deep",
+  );
+  const json = parseJSON(raw);
+  const clamp = (value: unknown, min: number, max: number): number => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(min, Math.min(max, numeric));
+  };
+
+  return {
+    score: clamp(json.score, -1, 1),
+    heat: clamp(json.heat, 0, 1),
+    heatDriver: coerceHeatDriver(json.heatDriver),
+    label: json.label ?? "中性",
+    dominantEmotion: json.dominantEmotion ?? "",
+    discussionSummary: json.discussionSummary ?? "",
+    marketAnalysis: json.marketAnalysis ?? "",
+    sentimentVsMarket: json.sentimentVsMarket ?? "",
+    hotTopics: Array.isArray(json.hotTopics) ? json.hotTopics.slice(0, 5) : [],
+    riskWarning: json.riskWarning ?? "",
+    summary: json.summary ?? "",
+  };
 }
 
 async function safeBuildMarketContext(

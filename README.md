@@ -21,9 +21,10 @@
 
 ## 独立日报脚本
 
-除了实时监控，还有按需运行的日报（同样只发到「已保存消息」），分析当天 JST 交易时段（09:00–15:00，含盘中全程）的消息：
+除了实时监控，还有两条互相独立的按需分析命令（同样只发到「已保存消息」）：
 
 - **`pnpm panic`** — 👻 鬼叫指数日报：识别群里的恐慌/炫耀情绪爆发，给出市场稳定性评分和逆向建议。
+- **`pnpm summary`** — 📋 今日综合总结：一次性分析当天 JST 09:00 至执行时刻的全部群消息，并结合配置的大盘行情总结普通讨论、情绪和市场状态；不包含鬼叫指数或个股详情。
 
 ## 快速开始
 
@@ -96,6 +97,7 @@ pnpm db:inspect
 | `MONITOR_MIN_ABS_SCORE` | 监控档下限（默认 0.6）：`>=` 的深度分析会调取实时行情 |
 | `ASSET_DETAIL_MIN_ABS_SCORE` | 单票分析下限（默认 0.65）：`>=` 才逐个跑 Top 资产单票分析 |
 | `ASSET_DETAIL_COUNT` | 单票分析数量（默认 3） |
+| `REPORT_BENCHMARKS` | `pnpm summary` 固定分析的大盘 Yahoo Finance symbol，逗号分隔（默认 `^N225`） |
 
 完整示例见 [.env.example](.env.example)。
 
@@ -108,6 +110,7 @@ pnpm db:inspect
 | `pnpm start` / `pnpm dev` | 启动实时情绪监控（`dev` 带热重载） |
 | `pnpm init-db` | 初始化本地 SQLite 数据库 |
 | `pnpm db:inspect` | 查看 SQLite 数据概览、最近消息和分析批次 |
+| `pnpm summary` | 生成今天 JST 09:00 至当前的群聊综合总结和大盘分析 |
 | `pnpm panic` | 生成鬼叫指数日报 |
 | `pnpm build` | TypeScript 编译到 `dist/` |
 

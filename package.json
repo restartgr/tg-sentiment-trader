@@ -5,12 +5,14 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "test": "tsx src/routing.test.ts",
     "auth": "tsx src/auth.ts",
     "list-groups": "tsx src/list-groups.ts",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "init-db": "tsx src/db.ts",
     "db:inspect": "tsx src/inspect-db.ts",
+    "summary": "tsx src/daily-summary.ts",
     "panic": "tsx src/panic-report.ts",
     "bomb": "tsx src/bomb-report.ts",
     "leaderboard": "tsx src/leaderboard-report.ts"
