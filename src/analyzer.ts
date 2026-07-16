@@ -92,7 +92,7 @@ function parseJSON(raw: string): any {
     // 值中未转义的裸双引号 -> 单引号
     (s: string) =>
       s.replace(
-        /("(?:quote|topQuote|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+        /("(?:quote|topQuote|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|marketOutlook|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
         (_m, open, value, close) =>
           open + value.replace(/(?<!\\)"/g, "'") + close,
       ),
@@ -101,7 +101,7 @@ function parseJSON(raw: string): any {
       s
         .replace(/,(\s*[}\]])/g, "$1")
         .replace(
-          /("(?:quote|topQuote|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+          /("(?:quote|topQuote|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|marketOutlook|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
           (_m, open, value, close) =>
             open + value.replace(/(?<!\\)"/g, "'") + close,
         ),
@@ -510,6 +510,7 @@ export interface DailySummaryResult {
   discussionSummary: string;
   marketAnalysis: string;
   sentimentVsMarket: string;
+  marketOutlook: string;
   hotTopics: string[];
   riskWarning: string;
   summary: string;
@@ -539,12 +540,13 @@ export async function analyzeDailySummary(
 【大盘详细分析】
 - marketAnalysis：只依据提供的大盘行情上下文，详细说明指数涨跌、当前状态、ORB、斐波那契和新闻。数据缺失就明确写缺失，禁止使用记忆补充点位。
 - sentimentVsMarket：比较群聊情绪与真实大盘表现是一致、滞后还是背离，并说明依据。
+- marketOutlook：推演接下来一个交易时段最可能的行情方向。必须包含主情景、判断依据、情景失效条件和高/中/低置信度；可以判断延续、震荡或反转风险，但不能把极端情绪机械地当作反向信号。数据不足时明确给出低置信度，不得编造行情或点位。
 - riskWarning：只提示数据、情绪一致性和市场波动风险，不给具体买卖、反向、仓位或目标点位建议。
 
 summary 用 2-3 句话综合今天 JST 09:00 截至当前的群聊与大盘状态。所有内容仅用于观察，不构成投资建议。
 
 只返回 JSON，不要其他文字。字符串值内禁止使用英文双引号，请用单引号或中文引号：
-{"score":0.0,"heat":0.0,"heatDriver":"上涨|下跌|多空分歧|其他或不明","label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","discussionSummary":"...","marketAnalysis":"...","sentimentVsMarket":"...","hotTopics":["..."],"riskWarning":"...","summary":"..."}`;
+{"score":0.0,"heat":0.0,"heatDriver":"上涨|下跌|多空分歧|其他或不明","label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","discussionSummary":"...","marketAnalysis":"...","sentimentVsMarket":"...","marketOutlook":"...","hotTopics":["..."],"riskWarning":"...","summary":"..."}`;
 
   const raw = await chat(
     system,
@@ -568,6 +570,7 @@ summary 用 2-3 句话综合今天 JST 09:00 截至当前的群聊与大盘状�
     discussionSummary: json.discussionSummary ?? "",
     marketAnalysis: json.marketAnalysis ?? "",
     sentimentVsMarket: json.sentimentVsMarket ?? "",
+    marketOutlook: json.marketOutlook ?? "",
     hotTopics: Array.isArray(json.hotTopics) ? json.hotTopics.slice(0, 5) : [],
     riskWarning: json.riskWarning ?? "",
     summary: json.summary ?? "",
