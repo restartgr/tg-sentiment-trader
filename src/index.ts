@@ -76,12 +76,20 @@ function resolveTier(absScore: number): TierRule | null {
   return ANALYSIS_TIERS.find((rule) => absScore >= rule.minAbsScore) ?? null;
 }
 
+// 情绪烈度：方向轴绝对值与烈度轴取大。吵架等「方向中性但很激烈」也能进档。
+function emotionIntensity(score: number, heat: number): number {
+  return Math.max(Math.abs(score), heat);
+}
+
 function tierRank(rule: TierRule): number {
   return ANALYSIS_TIERS.length - ANALYSIS_TIERS.indexOf(rule);
 }
 
-function resolveEffectiveTier(initialRule: TierRule, finalScore: number): TierRule | null {
-  const finalRule = resolveTier(Math.abs(finalScore));
+function resolveEffectiveTier(
+  initialRule: TierRule,
+  finalIntensity: number,
+): TierRule | null {
+  const finalRule = resolveTier(finalIntensity);
   if (!finalRule) return null;
   return tierRank(finalRule) <= tierRank(initialRule) ? finalRule : initialRule;
 }
@@ -120,11 +128,19 @@ function formatAssetDetail(detail: AssetDetailAnalysis): string {
     .join("\n\n");
 }
 
+// 烈度展示：偏高时才单独提示，避免刷屏。
+function formatHeatLine(heat: number): string {
+  if (heat < 0.6) return "";
+  const level = heat >= 0.85 ? "全群炸锅" : "情绪激烈";
+  return `🔥 烈度：${(heat * 100).toFixed(0)}%（${level}）`;
+}
+
 function formatQuickScore(result: BatchScoreResult): string {
   const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
 
   return [
     `${emoji} 情绪总览：${result.label} (${(result.score * 100).toFixed(0)}%)`,
+    formatHeatLine(result.heat),
     result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
     `💬 ${result.comment}`,
     `🧭 日常波动，暂不深入分析。`,
@@ -142,6 +158,7 @@ function formatPreheatSummary(
   return [
     `📋 今日预热总结（${messageCount} 条消息）`,
     `${emoji} 整体情绪：${result.label} (${(result.score * 100).toFixed(0)}%)`,
+    formatHeatLine(result.heat),
     result.dominantEmotion ? `🎭 主导情绪：${result.dominantEmotion}` : "",
     `💬 ${result.comment}`,
   ]
@@ -299,9 +316,9 @@ async function main() {
     try {
       const quick = await analyzeBatchScore(buffer);
       quickResult = quick;
-      const quickAbsScore = Math.abs(quick.score);
+      const quickIntensity = emotionIntensity(quick.score, quick.heat);
 
-      const rule = resolveTier(quickAbsScore);
+      const rule = resolveTier(quickIntensity);
       initialTier = rule?.tier ?? null;
 
       // 未达最低档（默认 < 0.5）：只发轻量总览
@@ -322,7 +339,7 @@ async function main() {
           status: "completed",
         });
         console.log(
-          `📎 轻量总览完成 | ${quick.label}(${quick.score.toFixed(2)}) | ${quick.comment}`,
+          `📎 轻量总览完成 | ${quick.label}(${quick.score.toFixed(2)}) 烈度${quick.heat.toFixed(2)} | ${quick.comment}`,
         );
         await sendToSavedMessages(client, formatQuickScore(quick));
         return;
@@ -333,7 +350,10 @@ async function main() {
         ? await buildBatchMarketContext(buffer)
         : NO_MARKET_CONTEXT;
       const result = await analyzeBatch(buffer, marketContext);
-      const effectiveRule = resolveEffectiveTier(rule, result.score);
+      const effectiveRule = resolveEffectiveTier(
+        rule,
+        emotionIntensity(result.score, result.heat),
+      );
       persistedBatchId = saveBatch({
         groupId,
         messageIds,
@@ -353,7 +373,7 @@ async function main() {
         result.topAssets.map((a) => `${a.nickname}(${a.ticker})`).join(", ") ||
         "无";
       console.log(
-        `📊 ${rule.tier} 分析完成 | 复核档位:${effectiveRule?.tier ?? "quick"} | ${result.label}(${result.score.toFixed(2)}) | ${result.dominantEmotion} | 行情:${rule.includeMarket ? "是" : "否"} | Top: ${assetsShort} | ${result.summary}`,
+        `📊 ${rule.tier} 分析完成 | 复核档位:${effectiveRule?.tier ?? "quick"} | ${result.label}(${result.score.toFixed(2)}) 烈度${result.heat.toFixed(2)} | ${result.dominantEmotion} | 行情:${rule.includeMarket ? "是" : "否"} | Top: ${assetsShort} | ${result.summary}`,
       );
 
       if (!effectiveRule) {
@@ -388,6 +408,7 @@ async function main() {
         `${emoji} 群体情绪告警：${result.label}`,
         ``,
         `📊 情感得分：${(result.score * 100).toFixed(0)}%`,
+        formatHeatLine(result.heat),
         `🎭 主导情绪：${result.dominantEmotion}`,
         effectiveRule.banner,
         ``,

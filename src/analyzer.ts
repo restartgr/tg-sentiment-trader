@@ -166,7 +166,8 @@ export interface AssetInfo {
 }
 
 export interface BatchAnalysisResult {
-  score: number;
+  score: number; // 方向轴：看涨(+) / 看跌(-)
+  heat: number; // 烈度轴：0~1，群体情绪激烈程度，与方向无关
   label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
   topAssets: AssetInfo[]; // 最多 5 个最热资产
   dominantEmotion: string; // 主导情绪（恐慌/亢奋/迷茫/分歧/麻木/嘲讽 等）
@@ -183,7 +184,8 @@ export interface BatchAnalysisResult {
 // 初筛轮只做最轻量的情绪打分：分数 + 主导情绪 + 一句点评。
 // 资产识别/行情/点位等重活留给达标后的深度轮 analyzeBatch，避免每个 batch 都白跑。
 export interface BatchScoreResult {
-  score: number;
+  score: number; // 方向轴：看涨(+) / 看跌(-)
+  heat: number; // 烈度轴：0~1，群体情绪激烈程度，与方向无关（吵架/对骂/爆发都算高烈度）
   label: "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
   dominantEmotion: string;
   comment: string;
@@ -204,7 +206,12 @@ export async function analyzeBatchScore(
   messages: { username: string; text: string }[],
 ): Promise<BatchScoreResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
-  const system = `你是散户投机群的轻量情绪评分器。只判断这批消息的群体情绪强度，不识别资产、不做行情/新闻/技术分析、不编造任何价位。输出务必极简。
+  const system = `你是散户投机群的轻量情绪评分器。判断这批消息的群体情绪，输出两根相互独立的轴：方向(score) 和 烈度(heat)。不识别资产、不做行情/新闻/技术分析、不编造任何价位。输出务必极简。
+
+【两根轴，务必分开判断】
+- score（方向轴，-1~+1）：群体是看涨还是看跌。多空分歧僵持 → 落在中性区 -0.2~+0.2。
+- heat（烈度轴，0~1）：群体情绪有多激烈/极端，跟方向无关。吵架、对骂、集体破防、疯狂刷屏、亢奋梭哈、绝望割肉、激烈对喷，都算高烈度。
+- 关键：吵架 / 激烈多空对喷 / 情绪爆发 时，score 可能因为方向分歧而接近中性，但 heat 必须打高（≥0.6），不要因为方向不明就把整体情绪判成平淡。
 
 【关键判别】
 - 先判断痛苦/亢奋来自多头还是空头，不要只看"跌懵了""求放过""完了"这类字面词。
@@ -228,11 +235,17 @@ export async function analyzeBatchScore(
 - -0.5 ~ -0.65：明显悲观（一群人形成看空/割肉气氛）
 - -0.65 ~ -1.0：极度恐慌、割肉、崩溃或绝望
 
-dominantEmotion 用一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/麻木/嘲讽 等）。
-comment 写一句很短的中文点评，低于 30 字，说明哪一边情绪更强，不要给交易建议。
+heat 评分参考：
+- 0.0~0.3：平淡，零星发言或闲聊灌水
+- 0.3~0.6：有一定情绪但未爆发
+- 0.6~0.85：情绪激烈，吵架/对喷/集体亢奋或恐慌
+- 0.85~1.0：全群炸锅、疯狂刷屏、极端破防
+
+dominantEmotion 用一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/争吵/麻木/嘲讽 等）。
+comment 写一句很短的中文点评，低于 30 字，说明方向与烈度（哪一边情绪更强、是否在吵），不要给交易建议。
 
 只返回JSON，不要其他文字：
-{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","comment":"一句话点评"}`;
+{"score":0.0,"heat":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","comment":"一句话点评"}`;
 
   try {
     const raw = await chat(
@@ -244,6 +257,7 @@ comment 写一句很短的中文点评，低于 30 字，说明哪一边情绪�
     const json = parseJSON(raw);
     return {
       score: Math.max(-1, Math.min(1, json.score)),
+      heat: Math.max(0, Math.min(1, json.heat ?? 0)),
       label: json.label ?? "中性",
       dominantEmotion: json.dominantEmotion ?? "",
       comment: json.comment ?? "情绪暂无明显极端变化。",
@@ -284,7 +298,10 @@ export async function analyzeBatch(
 - 多头喊"亏麻了""割肉""崩了""跌死了"才更可能代表市场悲观/多头恐慌。
 - comment、emotionDetail、crowdBehavior 中要写清楚是"空头痛苦"、"多头恐慌"还是"多空分歧"。
 
-评分规则：
+【两根轴，务必分开判断】
+score（方向轴）判断看涨/看跌，heat（烈度轴，0~1）判断情绪有多激烈，两者独立。吵架/激烈多空对喷/集体破防时，score 可能因分歧接近中性，但 heat 必须打高（≥0.6）。
+
+score 评分规则：
 - +0.65 ~ +1.0：群体极度亢奋，疯狂看涨
 - +0.5 ~ +0.65：整体明显乐观
 - +0.2 ~ +0.5：整体轻微乐观
@@ -292,6 +309,9 @@ export async function analyzeBatch(
 - -0.2 ~ -0.5：整体轻微悲观
 - -0.5 ~ -0.65：整体明显悲观
 - -0.65 ~ -1.0：群体极度恐慌，割肉跑路
+
+heat 评分规则：
+- 0.0~0.3：平淡；0.3~0.6：有情绪未爆发；0.6~0.85：吵架/对喷/亢奋或恐慌；0.85~1.0：全群炸锅、极端破防
 
 【重点 - 情绪分析】
 dominantEmotion: 一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/麻木/FOMO/绝望/侥幸/狂热/犹豫 等）
@@ -332,7 +352,7 @@ signal 格式必须包含：
 marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近新闻、斐波那契回撤位置、ORB 开盘区间状态。只引用行情上下文提供的数据；新闻没取到就说新闻缺失；技术数据不足就说数据不足。
 
 只返回JSON，不要其他文字。字符串值内禁止使用英文双引号，请用单引号或中文引号：
-{"score":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","emotionDetail":"...","divergence":"...","crowdBehavior":"...","hotTopics":["..."],"riskWarning":"...","marketInsight":"...","topAssets":[{"nickname":"...","name":"...","ticker":"...","exchange":"..."}],"summary":"一句话总结","signal":"【跟随/反向/观望】总判断\\n理由：...\\n已持仓者：\\n- 资产A：...\\n未持仓者：\\n- 资产A：..."}`;
+{"score":0.0,"heat":0.0,"label":"极度悲观|悲观|中性|乐观|极度乐观","dominantEmotion":"...","emotionDetail":"...","divergence":"...","crowdBehavior":"...","hotTopics":["..."],"riskWarning":"...","marketInsight":"...","topAssets":[{"nickname":"...","name":"...","ticker":"...","exchange":"..."}],"summary":"一句话总结","signal":"【跟随/反向/观望】总判断\\n理由：...\\n已持仓者：\\n- 资产A：...\\n未持仓者：\\n- 资产A：..."}`;
 
   try {
     const raw = await chat(
@@ -348,6 +368,7 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
         : [];
     return {
       score: Math.max(-1, Math.min(1, json.score)),
+      heat: Math.max(0, Math.min(1, json.heat ?? 0)),
       label: json.label,
       topAssets,
       dominantEmotion: json.dominantEmotion ?? "",
