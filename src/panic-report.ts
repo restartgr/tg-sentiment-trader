@@ -109,18 +109,22 @@ async function main() {
       console.log(`   拉取总计：${allMessages.length} 条 | 今日有文本：${todayTotal} 条 | 分析区间：${filtered.length} 条（09:00-${currentTime} JST）`);
 
       if (filtered.length === 0) {
-        console.log(`   ⚠️ 暂无开盘期消息`);
+        console.log(`   ⚠️ 今日 JST 09:00 至当前暂无可分析消息`);
         continue;
       }
 
+      // 按 senderId 去重（同名不同人不会被合并）；无 senderId 再退回 name。
+      // name 仍保留喂给模型。
       const buffer: { username: string; text: string }[] = [];
+      const participantKeys = new Set<string>();
       for (const msg of filtered) {
         const name = await getSenderName(msg);
         buffer.push({ username: name, text: msg.text!.trim() });
+        participantKeys.add(msg.senderId?.toString() ?? `name:${name}`);
       }
 
       console.log(`   🤖 AI 分析中...`);
-      const participantCount = new Set(buffer.map((message) => message.username)).size;
+      const participantCount = participantKeys.size;
       const statsContext = [
         `统计区间：JST 09:00-${currentTime}`,
         `消息数：${buffer.length}`,
