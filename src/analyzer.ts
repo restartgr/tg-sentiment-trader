@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { config } from "./config";
 import { buildAssetMarketContext, buildMarketContext } from "./market-data";
+import { derivePanicMetrics } from "./panic-metrics";
 import { coerceHeatDriver, HeatDriver } from "./routing";
 
 interface AssetConfig {
@@ -614,7 +615,9 @@ export interface PanicRankEntry {
 }
 
 export interface PanicHypeResult {
-  panicIndex: number; // 0-100：越高越混乱
+  panicIndex: number; // 0-100：交易相关的鬼叫/炫耀越强越高
+  heat: number; // 0-100：全部群消息的群体烈度
+  heatDriver: HeatDriver;
   stabilityScore: number; // 0-100：越高越稳定
   stabilityLabel: "极不稳定" | "不稳定" | "一般" | "较稳定" | "非常稳定";
   panicCount: number; // 鬼叫人数
@@ -627,24 +630,28 @@ export interface PanicHypeResult {
   crowdBehavior: string; // 群体行为特征（抱团、互相喊单、各自为战等）
   summary: string; // 整体总结（3-4句）
   warning: string; // 风险提示
-  contrarian: string; // 逆向思考建议
+  marketOutlook: string; // 基于真实行情和群体情绪的条件式推演
   leaderboard: PanicRankEntry[]; // 鬼叫排行榜，按score降序
 }
 
 export async function analyzePanicHype(
   messages: { username: string; text: string }[],
+  marketContext = "未提供大盘行情；禁止编造指数点位、涨跌幅或技术位置。",
+  statsContext = "",
 ): Promise<PanicHypeResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
-  const system = `你是专业的散户群聊行为分析师，擅长从聊天记录中识别极端情绪行为并判断市场稳定性。
+  const system = `你是专业的散户群聊行为分析师，擅长从聊天记录中识别极端情绪行为，并结合真实大盘行情判断市场状态。
 
-分析时间段为交易时段（09:00-15:00 JST，含盘中全程），聚焦交易行为中的情绪爆发。
+本报告只分析今天 JST 09:00 截至统计时刻的数据。鬼叫指数与群体烈度是两个不同指标，不得混为一谈。
 
-【重要原则】只分析纯情绪化发言，忽略以下内容：
+━━━ 鬼叫指数：只看交易情绪爆发 ━━━
+识别鬼叫、炫耀和排行榜时，只分析纯情绪化的交易发言，忽略以下内容：
 - 技术分析、K线形态、支撑压力位讨论
 - 基本面分析、财报、新闻解读
 - 平静的问答、价格询问、一般闲聊
 - 有理有据的看涨/看跌判断（附带逻辑的不算）
 只有纯粹的情绪爆发才计入——"亏死了""赚麻了""完了"这类没有分析内容、纯靠情绪驱动的发言。
+普通争吵、骂人或与股票无关的激动发言可以提高 heat，但绝不能计入 panicIndex、panicCount、hypeCount 或排行榜。
 
 ━━━ 鬼叫识别权重（亏损引发的极端反应）━━━
 【权重×3 极端】纯粹抱怨+大量情绪符号叠加：如"草草草！！！亏死了😭😭"、"完了完了！！卧槽！！"、"AAAA跌死我了"、爆仓/追保/强平+骂人
@@ -667,52 +674,75 @@ export async function analyzePanicHype(
 做空：做空/空单/short/put/卖空/看跌/对冲/跌了赚钱/空赢了
 不明：没有方向信息或泛泛抱怨
 
-━━━ 稳定性逻辑 ━━━
-- 多人爆仓/割肉(鬼叫强烈) → 极不稳定，底部信号或恐慌蔓延
-- 多人炫耀暴赚(炫耀强烈) → 不稳定，泡沫/顶部信号
-- 鬼叫+炫耀同时出现 → 单边行情，分化严重，不稳定
-- 讨论以技术面/基本面为主，情绪平稳 → 较稳定
+━━━ 两个强度指标 ━━━
+- panicIndex（0~100）：只衡量交易相关鬼叫与炫耀的广度和强度。少数人重复刷屏不能等同于全群失控；参与人数越广、措辞越极端才越高。
+- heat（0~100）：观察全部消息的群体烈度，包括与股票无关的争吵。消息多不等于烈度高，必须根据实际措辞判断。
+- heatDriver：只能是"上涨"、"下跌"、"多空分歧"、"其他或不明"。普通争吵或无法确认市场方向时必须选"其他或不明"。
+- 参考区间：0~20 平静，21~40 局部波动，41~60 明显升温，61~80 高烈度，81~100 群体失控。
 - events数组：只记录有明显情绪爆发的消息，每条quote截取最能体现情绪的原文片段(≤40字)
 - 所有字符串值中不得包含英文双引号，如原文有双引号请改用单引号或省略
+
+━━━ 行情与推演 ━━━
+- phaseAnalysis：描述消息顺序中鬼叫/炫耀情绪如何演变，不得仅凭聊天编造真实指数的开盘、拉升、跳水或尾盘路径。
+- marketOutlook：只依据提供的大盘行情和群体情绪，推演接下来一个交易时段的主情景；必须包含依据、失效条件和高/中/低置信度。极端情绪只能作为风险因子，不能机械地当成反向信号，也不能给出买卖、仓位或目标点位建议。
+- warning：提示数据覆盖、单一群体样本、行情波动或情绪误判风险。
 
 ━━━ 鬼叫排行榜 ━━━
 leaderboard：统计每个有情绪发言的用户，最多返回10人，按情绪强度综合排名（强烈鬼叫/炫耀权重更高）。
 给每人起一个贴切称号，例如：爆仓王、割肉侠、炫耀大师、韭菜精、空头刺客、死扛侠、恐慌大叔等。
 topQuote取该用户最具代表性的一句情绪发言（≤30字）。
 
-只返回JSON，不要其他文字：
-{"panicIndex":0-100整数,"stabilityScore":0-100整数,"stabilityLabel":"极不稳定|不稳定|一般|较稳定|非常稳定","panicCount":整数,"hypeCount":整数,"longBias":0-100整数,"shortBias":0-100整数,"dominantSide":"多|空|均衡","events":[{"type":"鬼叫|炫耀","quote":"原文片段","side":"多|空|不明","intensity":"轻微|中等|强烈"}],"phaseAnalysis":"描述今日盘中节奏（3-4句）","crowdBehavior":"描述群体行为特征（2-3句）","summary":"整体总结（3-4句，包含多空主导、情绪强度、典型行为）","warning":"风险提示（1句）","contrarian":"逆向操作建议（1句，基于鬼叫/炫耀程度判断）","leaderboard":[{"username":"用户名","score":整数,"panicCount":整数,"hypeCount":整数,"topQuote":"最具代表性一句","label":"称号"}]}`;
+只返回JSON，不要其他文字。stabilityScore、stabilityLabel 和 dominantSide 由程序计算，不需要返回：
+{"panicIndex":0-100整数,"heat":0-100整数,"heatDriver":"上涨|下跌|多空分歧|其他或不明","panicCount":整数,"hypeCount":整数,"longBias":0-100整数,"shortBias":0-100整数,"events":[{"type":"鬼叫|炫耀","quote":"原文片段","side":"多|空|不明","intensity":"轻微|中等|强烈|极端"}],"phaseAnalysis":"描述情绪演变（2-3句）","crowdBehavior":"描述群体行为特征（2-3句）","summary":"整体总结（3-4句，区分鬼叫指数与全群烈度）","warning":"风险提示（1句）","marketOutlook":"条件式行情推演（2-3句）","leaderboard":[{"username":"用户名","score":整数,"panicCount":整数,"hypeCount":整数,"topQuote":"最具代表性一句","label":"称号"}]}`;
 
-  const clamp = (v: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
   try {
     const raw = await chat(
       system,
-      `分析以下 ${messages.length} 条开盘期间群消息，输出鬼叫指数报告：\n\n${formatted}`,
+      `【消息统计】\n${statsContext || `消息数：${messages.length}`}\n\n【大盘行情上下文】\n${marketContext}\n\n【今天 JST 09:00 截至统计时刻的群消息，共 ${messages.length} 条】\n${formatted}`,
       16000,
     );
     console.log("📥 原始返回（前300字）：", raw.slice(0, 300));
     const json = parseJSON(raw);
+    const metrics = derivePanicMetrics(
+      json.panicIndex,
+      json.heat,
+      json.longBias,
+      json.shortBias,
+    );
+    const participantCount = new Set(
+      messages.map((message) => message.username),
+    ).size;
+    const normalizePeopleCount = (value: unknown): number => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return 0;
+      return Math.min(participantCount, Math.max(0, Math.round(numeric)));
+    };
+
     return {
-      panicIndex: clamp(json.panicIndex),
-      stabilityScore: clamp(json.stabilityScore),
-      stabilityLabel: json.stabilityLabel,
-      panicCount: json.panicCount ?? 0,
-      hypeCount: json.hypeCount ?? 0,
-      longBias: clamp(json.longBias),
-      shortBias: clamp(json.shortBias),
-      dominantSide: json.dominantSide ?? "均衡",
+      panicIndex: metrics.panicIndex,
+      heat: metrics.heat,
+      heatDriver: coerceHeatDriver(json.heatDriver),
+      stabilityScore: metrics.stabilityScore,
+      stabilityLabel: metrics.stabilityLabel,
+      panicCount: normalizePeopleCount(json.panicCount),
+      hypeCount: normalizePeopleCount(json.hypeCount),
+      longBias: metrics.longBias,
+      shortBias: metrics.shortBias,
+      dominantSide: metrics.dominantSide,
       events: Array.isArray(json.events) ? json.events : [],
       phaseAnalysis: json.phaseAnalysis ?? "",
       crowdBehavior: json.crowdBehavior ?? "",
       summary: json.summary ?? "",
       warning: json.warning ?? "",
-      contrarian: json.contrarian ?? "",
+      marketOutlook: json.marketOutlook ?? "",
       leaderboard: Array.isArray(json.leaderboard) ? json.leaderboard : [],
     };
   } catch (e) {
     console.error("鬼叫指数解析失败：", e);
     return {
       panicIndex: 0,
+      heat: 0,
+      heatDriver: "其他或不明",
       stabilityScore: 50,
       stabilityLabel: "一般",
       panicCount: 0,
@@ -725,7 +755,7 @@ topQuote取该用户最具代表性的一句情绪发言（≤30字）。
       crowdBehavior: "",
       summary: "解析失败",
       warning: "数据异常",
-      contrarian: "",
+      marketOutlook: "数据不足，无法推演。",
       leaderboard: [],
     };
   }

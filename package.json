@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "tsx src/routing.test.ts",
+    "test": "tsx src/routing.test.ts && tsx src/panic-metrics.test.ts",
     "auth": "tsx src/auth.ts",
     "list-groups": "tsx src/list-groups.ts",
     "dev": "tsx watch src/index.ts",
