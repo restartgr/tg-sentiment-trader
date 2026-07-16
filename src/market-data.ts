@@ -360,6 +360,27 @@ export async function buildAssetMarketContext(
   return formatAssetContext(normalized, quote, news, technical);
 }
 
+export async function buildBenchmarkMarketContext(
+  symbols: string[],
+): Promise<string> {
+  if (symbols.length === 0) {
+    return "未配置大盘标的；禁止编造指数点位、涨跌幅或技术位置。";
+  }
+
+  const lines = await Promise.all(
+    symbols.map((symbol) =>
+      buildAssetMarketContext({
+        nickname: symbol,
+        name: symbol,
+        ticker: symbol,
+        exchange: "INDEX",
+      }),
+    ),
+  );
+
+  return lines.join("\n");
+}
+
 export async function buildMarketContext(
   messages: { text: string }[],
 ): Promise<string> {

@@ -28,6 +28,16 @@ import {
   sendToSavedMessages,
   todayJSTStart,
 } from "./telegram-utils";
+import {
+  decideDeepOutcome,
+  heatDriverEmoji,
+  heatDriverHeadline,
+  isHeatTriggered,
+  isScoreTriggered,
+  marketAllowedThisRound,
+  shouldDeepAnalyze,
+  triggerReason,
+} from "./routing";
 
 interface BufferedMessage {
   dbId: number;
@@ -76,21 +86,20 @@ function resolveTier(absScore: number): TierRule | null {
   return ANALYSIS_TIERS.find((rule) => absScore >= rule.minAbsScore) ?? null;
 }
 
-// 情绪烈度：方向轴绝对值与烈度轴取大。吵架等「方向中性但很激烈」也能进档。
-function emotionIntensity(score: number, heat: number): number {
-  return Math.max(Math.abs(score), heat);
-}
 
 function tierRank(rule: TierRule): number {
   return ANALYSIS_TIERS.length - ANALYSIS_TIERS.indexOf(rule);
 }
 
-function resolveEffectiveTier(
-  initialRule: TierRule,
-  finalIntensity: number,
+// 交易档位只由方向轴 score 决定（不由 heat 决定）。深度轮复核后取较保守的一档：
+// 若初筛已给出方向档，最终不超过它；初筛无方向档时直接采用深度轮的方向档。
+function resolveEffectiveDirectionTier(
+  initialRule: TierRule | null,
+  finalScore: number,
 ): TierRule | null {
-  const finalRule = resolveTier(finalIntensity);
+  const finalRule = resolveTier(Math.abs(finalScore));
   if (!finalRule) return null;
+  if (!initialRule) return finalRule;
   return tierRank(finalRule) <= tierRank(initialRule) ? finalRule : initialRule;
 }
 
@@ -135,6 +144,7 @@ function formatHeatLine(heat: number): string {
   return `🔥 烈度：${(heat * 100).toFixed(0)}%（${level}）`;
 }
 
+
 function formatQuickScore(result: BatchScoreResult): string {
   const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
 
@@ -166,19 +176,65 @@ function formatPreheatSummary(
     .join("\n");
 }
 
-function formatDowngradedAnalysis(
-  result: BatchAnalysisResult,
-  initialRule: TierRule,
-): string {
+function formatDowngradedAnalysis(result: BatchAnalysisResult): string {
   const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
 
   return [
     `${emoji} 情绪总览：${result.label} (${(result.score * 100).toFixed(0)}%)`,
     result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
     `💬 ${result.summary}`,
-    `🧭 轻量评分触发 ${initialRule.tier} 复核，但深度复核未达监控阈值，暂不进入监控区。`,
+    `🧭 触发了深度复核，但方向未达监控阈值、烈度也已回落，暂不进入监控区。`,
   ]
     .filter(Boolean)
+    .join("\n");
+}
+
+// 纯烈度过热告警（第一阶段：heat 触发路径一律未拉行情）：
+// 只描述情绪状态与来源，不展示行情/资产/单票，不给买卖或反向。
+function formatOverheatAlert(result: BatchAnalysisResult): string {
+  const driver = result.heatDriver;
+  const topicsStr = result.hotTopics.length
+    ? `\n\n🔥 讨论焦点：${result.hotTopics.join("、")}`
+    : "";
+
+  return [
+    `${heatDriverEmoji(driver)} 群体情绪过热：${heatDriverHeadline(driver)}`,
+    ``,
+    formatHeatLine(result.heat),
+    `🧭 烈度来源：${driver}`,
+    result.dominantEmotion ? `🎭 主导情绪：${result.dominantEmotion}` : "",
+    ``,
+    `💭 情绪剖析：`,
+    result.emotionDetail,
+    ``,
+    `⚖️ 分歧状态：${result.divergence}`,
+    `👥 群体行为：${result.crowdBehavior}`,
+    result.riskWarning ? `\n⚠️ 风险提示：${result.riskWarning}` : "",
+    topicsStr,
+    ``,
+    `💡 总结：${result.summary}`,
+    `🧭 本轮未加载行情，仅为情绪过热观察，非交易信号，不含买卖/反向/点位建议。`,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+}
+
+// 纯 heat 触发但深度复核把 score 抬到方向档：本轮未拉行情，不输出交易内容。
+function formatDirectionUpgradedNoMarket(result: BatchAnalysisResult): string {
+  const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
+
+  return [
+    `${emoji} 深度复核发现方向变化：${result.label} (${(result.score * 100).toFixed(0)}%)`,
+    formatHeatLine(result.heat),
+    result.dominantEmotion ? `🎭 主导情绪：${result.dominantEmotion}` : "",
+    ``,
+    `💭 情绪剖析：`,
+    result.emotionDetail,
+    ``,
+    `💡 总结：${result.summary}`,
+    `🧭 本轮因烈度触发、未加载行情，方向仅供参考；不给行情观点、交易 Banner、单票或点位建议，等待下一轮带行情复核。`,
+  ]
+    .filter((l) => l !== "")
     .join("\n");
 }
 
@@ -223,7 +279,7 @@ function describePace(buffer: BufferedMessage[]): string {
   const { startTime, endTime } = getBatchTimeRange(buffer);
   const spanMin = Math.max((endTime - startTime) / 60000, 0.1);
   const perMin = buffer.length / spanMin;
-  return `【群聊节奏】${buffer.length} 条消息集中在约 ${spanMin.toFixed(1)} 分钟内（约 ${perMin.toFixed(1)} 条/分钟）。发言越密集通常情绪烈度越高。`;
+  return `【群聊节奏】${buffer.length} 条消息集中在约 ${spanMin.toFixed(1)} 分钟内（约 ${perMin.toFixed(1)} 条/分钟）。密度只代表活跃度，是否激烈要结合措辞判断：冷静的高频讨论不等于高烈度。`;
 }
 
 async function main() {
@@ -326,13 +382,63 @@ async function main() {
     try {
       const quick = await analyzeBatchScore(buffer, paceNote);
       quickResult = quick;
-      const quickIntensity = emotionIntensity(quick.score, quick.heat);
 
-      const rule = resolveTier(quickIntensity);
-      initialTier = rule?.tier ?? null;
+      // 双触发：score 或 heat 任一达标都进 Deep（两个阈值相互独立）。
+      const scoreTriggered = isScoreTriggered(
+        quick.score,
+        config.sentiment.simpleAnalysisMinAbsScore,
+      );
+      const heatTriggered = isHeatTriggered(
+        quick.heat,
+        config.sentiment.heatDeepThreshold,
+      );
+      const wantDeep = shouldDeepAnalyze(
+        quick.score,
+        quick.heat,
+        config.sentiment.simpleAnalysisMinAbsScore,
+        config.sentiment.heatDeepThreshold,
+      );
+      const reason = triggerReason(scoreTriggered, heatTriggered);
+      // 交易档位只看方向轴 score（heat 不参与）。
+      const quickDirectionRule = resolveTier(Math.abs(quick.score));
+      initialTier = quickDirectionRule?.tier ?? null;
 
-      // 未达最低档（默认 < 0.5）：只发轻量总览
-      if (!rule) {
+      // 结构化日志基础字段（timestamp 在 emit 时统一补）。
+      const logBase = {
+        event: "sentiment_analysis",
+        quickScore: quick.score,
+        quickHeat: quick.heat,
+        quickHeatDriver: quick.heatDriver,
+        scoreTriggered,
+        heatTriggered,
+        triggerReason: reason,
+        modelLight: config.llm.modelLight,
+        modelDeep: config.llm.modelDeep,
+      };
+      const emitLog = (extra: Record<string, unknown>) => {
+        console.log(
+          JSON.stringify({
+            ...logBase,
+            ...extra,
+            batchId: persistedBatchId,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      };
+
+      // 强度未达最低档：只发轻量总览。
+      if (!wantDeep) {
+        const log = {
+          ...logBase,
+          finalScore: null,
+          finalHeat: null,
+          finalHeatDriver: "",
+          marketContextLoaded: false,
+          deepDirectionUpgraded: false,
+          alertPushed: true,
+          initialTier: "",
+          finalTier: "quick",
+        };
         persistedBatchId = saveBatch({
           groupId,
           messageIds,
@@ -345,25 +451,51 @@ async function main() {
           dominantEmotion: quick.dominantEmotion,
           summary: quick.comment,
           marketInsight: "",
-          result: { quick },
+          result: { quick, log },
           status: "completed",
         });
-        console.log(
-          `📎 轻量总览完成 | ${quick.label}(${quick.score.toFixed(2)}) 烈度${quick.heat.toFixed(2)} | ${quick.comment}`,
-        );
+        emitLog(log);
         await sendToSavedMessages(client, formatQuickScore(quick));
         return;
       }
 
-      // 行情上下文由调用方按档位准备好再注入，analyzeBatch 不关心是否拉取。
-      const marketContext = rule.includeMarket
+      // 第一阶段：只有 score 达标才允许拉行情；纯 heat 触发一律 NO_MARKET。
+      // heatDriver 不参与行情路由（先观察其是否稳定）。
+      const pullMarket =
+        marketAllowedThisRound(scoreTriggered) &&
+        (quickDirectionRule?.includeMarket ?? false);
+      const marketContext = pullMarket
         ? await buildBatchMarketContext(buffer)
         : NO_MARKET_CONTEXT;
       const result = await analyzeBatch(buffer, marketContext, paceNote);
-      const effectiveRule = resolveEffectiveTier(
-        rule,
-        emotionIntensity(result.score, result.heat),
+
+      // 交易档位由深度轮方向轴复核决定；heat 不能把它抬进交易档。
+      const directionRule = resolveEffectiveDirectionTier(
+        quickDirectionRule,
+        result.score,
       );
+      const deepDirectionUpgraded = !scoreTriggered && directionRule !== null;
+      const outcome = decideDeepOutcome({
+        scoreTriggered,
+        hasDirectionTier: directionRule !== null,
+        finalHeat: result.heat,
+        heatPushThreshold: config.sentiment.heatPushThreshold,
+      });
+      const finalTier = directionRule?.tier ?? outcome;
+      const alertPushed = outcome !== "overheat_silent";
+
+      const log = {
+        ...logBase,
+        finalScore: result.score,
+        finalHeat: result.heat,
+        finalHeatDriver: result.heatDriver,
+        marketContextLoaded: pullMarket,
+        deepDirectionUpgraded,
+        alertPushed,
+        initialTier: quickDirectionRule?.tier ?? "",
+        finalTier,
+      };
+
       persistedBatchId = saveBatch({
         groupId,
         messageIds,
@@ -371,26 +503,47 @@ async function main() {
         endTime,
         quickScore: quick.score,
         finalScore: result.score,
-        initialTier: rule.tier,
-        finalTier: effectiveRule?.tier ?? "quick",
+        initialTier: quickDirectionRule?.tier ?? null,
+        finalTier,
         dominantEmotion: result.dominantEmotion,
         summary: result.summary,
         marketInsight: result.marketInsight,
-        result: { quick, analysis: result },
+        result: { quick, analysis: result, log },
         status: "completed",
       });
-      const assetsShort =
-        result.topAssets.map((a) => `${a.nickname}(${a.ticker})`).join(", ") ||
-        "无";
-      console.log(
-        `📊 ${rule.tier} 分析完成 | 复核档位:${effectiveRule?.tier ?? "quick"} | ${result.label}(${result.score.toFixed(2)}) 烈度${result.heat.toFixed(2)} | ${result.dominantEmotion} | 行情:${rule.includeMarket ? "是" : "否"} | Top: ${assetsShort} | ${result.summary}`,
-      );
+      emitLog(log);
 
-      if (!effectiveRule) {
-        await sendToSavedMessages(client, formatDowngradedAnalysis(result, rule));
+      // 方向回落且烈度也降下来：仅发总览。
+      if (outcome === "downgraded") {
+        await sendToSavedMessages(client, formatDowngradedAnalysis(result));
         return;
       }
 
+      // 纯 heat 触发、finalHeat 未达推送阈值：只落库+日志，不推送。
+      if (outcome === "overheat_silent") {
+        console.log(
+          `🔕 情绪过热但未达推送阈值(${config.sentiment.heatPushThreshold})，仅记录 | 烈度${result.heat.toFixed(2)} 来源${result.heatDriver}`,
+        );
+        return;
+      }
+
+      // 纯 heat 触发、finalHeat 达标：推送情绪过热摘要，无交易内容。
+      if (outcome === "overheat_push") {
+        await sendToSavedMessages(client, formatOverheatAlert(result));
+        return;
+      }
+
+      // 纯 heat 触发但 Deep 把 score 抬到方向档：本轮未拉行情，不输出交易内容。
+      if (outcome === "direction_upgraded_no_market") {
+        await sendToSavedMessages(
+          client,
+          formatDirectionUpgradedNoMarket(result),
+        );
+        return;
+      }
+
+      // directional：score 达标，走原有方向交易工作流。
+      const rule = directionRule!;
       const emoji = result.score > 0 ? "🚨📈" : "🚨📉";
 
       let assetsStr = "";
@@ -410,7 +563,7 @@ async function main() {
         : "";
 
       const marketInsightStr =
-        effectiveRule.includeMarket && result.marketInsight
+        rule.includeMarket && result.marketInsight
           ? `\n\n📈 行情视角：${result.marketInsight}`
           : "";
 
@@ -420,7 +573,7 @@ async function main() {
         `📊 情感得分：${(result.score * 100).toFixed(0)}%`,
         formatHeatLine(result.heat),
         `🎭 主导情绪：${result.dominantEmotion}`,
-        effectiveRule.banner,
+        rule.banner,
         ``,
         `💭 情绪剖析：`,
         result.emotionDetail,
@@ -438,8 +591,8 @@ async function main() {
 
       await sendToSavedMessages(client, msg);
 
-      if (!effectiveRule.runAssetDetail) {
-        console.log(`⏭️ 当前档位 ${effectiveRule.tier}，仅发送总览`);
+      if (!rule.runAssetDetail) {
+        console.log(`⏭️ 当前档位 ${rule.tier}，仅发送总览`);
         return;
       }
 

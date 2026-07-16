@@ -61,6 +61,10 @@ export const config = {
         "大G,大g,梭哈,all.?in,全仓,割肉,跑路,爆仓,归零,上车,清仓",
     ),
   },
+  report: {
+    // 今日综合总结固定观察的大盘标的，直接使用 Yahoo Finance symbol。
+    benchmarks: parseList(process.env.REPORT_BENCHMARKS ?? "^N225"),
+  },
   sentiment: {
     // 情感分析触发条件：连续 N 条消息的平均分超过阈值
     batchSize: parseIntEnv("SENTIMENT_BATCH_SIZE", 20),
@@ -71,6 +75,11 @@ export const config = {
     ),
     // 监控档：>= 此值的深度分析会调取实时行情/斐波/ORB
     monitorMinAbsScore: parseFloatEnv("MONITOR_MIN_ABS_SCORE", 0.6),
+    // 烈度触发深度分析：heat >= 此值即使 score 中性也进 Deep（与 score 阈值独立）。
+    // 只表示"进入 Deep 去理解"，不代表要推送、更不代表可交易。
+    heatDeepThreshold: parseFloatEnv("HEAT_DEEP_THRESHOLD", 0.6),
+    // 纯烈度告警的推送门槛：finalHeat >= 此值才推送"情绪过热"摘要（低于则只落库+日志）。
+    heatPushThreshold: parseFloatEnv("HEAT_PUSH_THRESHOLD", 0.8),
     // 单票详细分析：>= 此值才逐个跑 Top 资产单票分析
     assetDetailMinAbsScore: parseFloatEnv("ASSET_DETAIL_MIN_ABS_SCORE", 0.65),
     // 单票详细分析数量
