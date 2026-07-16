@@ -44,13 +44,15 @@ export const config = {
     // 你自己的 Telegram user ID（用于接收提醒）
     myUserId: parseIntEnv("TG_MY_USER_ID"),
     bombTarget: process.env.TG_BOMB_TARGET ?? "",
+    // 是否把自己的发言从情绪分析里剔除（默认剔除，设 TG_EXCLUDE_SELF=false 关闭）
+    excludeSelf: (process.env.TG_EXCLUDE_SELF ?? "true").toLowerCase() !== "false",
   },
   llm: {
     apiKey: requireEnv("ANTHROPIC_API_KEY"),
     // 模型分层：light 跑高频的轻量评分，deep 跑重要的深度分析。
     // Haiku 在首轮情绪评分上偏差过大，light 默认也用 Sonnet（可经 env 覆盖回 Haiku）。
-    modelLight: process.env.MODEL_LIGHT ?? "claude-sonnet-4-6",
-    modelDeep: process.env.MODEL_DEEP ?? "claude-sonnet-4-6",
+    modelLight: process.env.MODEL_LIGHT ?? "claude-sonnet-5",
+    modelDeep: process.env.MODEL_DEEP ?? "claude-sonnet-5",
   },
   keywords: {
     // 包含这些词就触发 AI 分析（不区分买卖，由 AI 判断）
