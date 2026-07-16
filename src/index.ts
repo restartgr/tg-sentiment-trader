@@ -19,14 +19,12 @@ import {
 } from "./analyzer";
 import {
   createTelegramClient,
-  fetchMessagesSince,
   getSenderName,
   isOwnMessage,
   normalizeTelegramId,
   readSessionString,
   resolveGroup,
   sendToSavedMessages,
-  todayJSTStart,
 } from "./telegram-utils";
 import {
   decideDeepOutcome,
@@ -137,10 +135,16 @@ function formatAssetDetail(detail: AssetDetailAnalysis): string {
     .join("\n\n");
 }
 
-// 烈度展示：偏高时才单独提示，避免刷屏。
+// 烈度展示：始终显示，方便实时观察与校准。
 function formatHeatLine(heat: number): string {
-  if (heat < 0.6) return "";
-  const level = heat >= 0.85 ? "全群炸锅" : "情绪激烈";
+  const level =
+    heat >= 0.85
+      ? "全群炸锅"
+      : heat >= 0.6
+        ? "情绪激烈"
+        : heat >= 0.3
+          ? "有情绪"
+          : "平淡";
   return `🔥 烈度：${(heat * 100).toFixed(0)}%（${level}）`;
 }
 
@@ -154,23 +158,6 @@ function formatQuickScore(result: BatchScoreResult): string {
     result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
     `💬 ${result.comment}`,
     `🧭 日常波动，暂不深入分析。`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function formatPreheatSummary(
-  result: BatchScoreResult,
-  messageCount: number,
-): string {
-  const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
-
-  return [
-    `📋 今日预热总结（${messageCount} 条消息）`,
-    `${emoji} 整体情绪：${result.label} (${(result.score * 100).toFixed(0)}%)`,
-    formatHeatLine(result.heat),
-    result.dominantEmotion ? `🎭 主导情绪：${result.dominantEmotion}` : "",
-    `💬 ${result.comment}`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -309,67 +296,6 @@ async function main() {
 
   const messageBuffers = new Map<string, BufferedMessage[]>();
 
-  async function runPreheatSummary(
-    groupId: string,
-    buffer: BufferedMessage[],
-  ): Promise<void> {
-    const { startTime, endTime } = getBatchTimeRange(buffer);
-    const messageIds = buffer.map((message) => message.dbId);
-
-    try {
-      // 预热只调用一次轻量总结，不进入实时档位、行情或单票分析流程。
-      const summary = await analyzeBatchScore(buffer);
-      saveBatch({
-        groupId,
-        messageIds,
-        startTime,
-        endTime,
-        quickScore: summary.score,
-        finalScore: null,
-        initialTier: "preheat",
-        finalTier: "preheat",
-        dominantEmotion: summary.dominantEmotion,
-        summary: summary.comment,
-        marketInsight: "",
-        result: { preheat: summary },
-        status: "completed",
-      });
-
-      // 已落库为 completed，发送做成 best-effort：发送失败不能再写一条 failed 记录。
-      try {
-        await sendToSavedMessages(
-          client,
-          formatPreheatSummary(summary, buffer.length),
-        );
-      } catch (sendErr) {
-        console.error("预热总结发送失败:", sendErr);
-      }
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      try {
-        saveBatch({
-          groupId,
-          messageIds,
-          startTime,
-          endTime,
-          quickScore: null,
-          finalScore: null,
-          initialTier: "preheat",
-          finalTier: null,
-          dominantEmotion: "",
-          summary: "",
-          marketInsight: "",
-          result: {},
-          status: "failed",
-          errorMessage: reason,
-        });
-      } catch (dbErr) {
-        console.error("预热失败记录写入数据库失败:", dbErr);
-      }
-      console.error("预热总结失败:", err);
-    }
-  }
-
   async function runBatchAnalysis(groupId: string, buffer: BufferedMessage[]) {
     const { startTime, endTime } = getBatchTimeRange(buffer);
     const messageIds = buffer.map((message) => message.dbId);
@@ -455,6 +381,9 @@ async function main() {
           status: "completed",
         });
         emitLog(log);
+        console.log(
+          `📎 轻量总览 | ${quick.label}(${quick.score.toFixed(2)}) 烈度${quick.heat.toFixed(2)} 来源${quick.heatDriver} | ${quick.comment}`,
+        );
         await sendToSavedMessages(client, formatQuickScore(quick));
         return;
       }
@@ -512,6 +441,9 @@ async function main() {
         status: "completed",
       });
       emitLog(log);
+      console.log(
+        `📊 深度分析 | ${outcome} | 交易档:${directionRule?.tier ?? "无"} | ${result.label}(${result.score.toFixed(2)}) 烈度${result.heat.toFixed(2)} 来源${result.heatDriver} | 行情:${pullMarket ? "是" : "否"}`,
+      );
 
       // 方向回落且烈度也降下来：仅发总览。
       if (outcome === "downgraded") {
@@ -644,53 +576,14 @@ async function main() {
     }
   }
 
-  // 历史预热
-  const todayStart = todayJSTStart();
-  console.log(`⏳ 拉取今日历史消息...`);
-
+  // 不做启动预热：历史消息的当日总结交给 `pnpm summary`。
+  // 这里只初始化空 buffer，实时消息到达后按 batchSize 进入完整 workflow。
   for (const groupEntity of targetGroupEntities) {
     const groupId = normalizeTelegramId(groupEntity.id.toString());
-    try {
-      const allMessages = await fetchMessagesSince(
-        client,
-        groupEntity,
-        todayStart.getTime(),
-      );
-      const todayMessages = allMessages
-        .filter(
-          (m) =>
-            m.date * 1000 >= todayStart.getTime() &&
-            m.text?.trim() &&
-            !(
-              config.telegram.excludeSelf &&
-              isOwnMessage(m, config.telegram.myUserId)
-            ),
-        )
-        .reverse();
-
-      console.log(`   今日消息 ${todayMessages.length} 条`);
-
-      const buffer: BufferedMessage[] = [];
-      for (const msg of todayMessages) {
-        const storedMessage = await persistTelegramMessage(msg, groupId);
-        buffer.push(storedMessage);
-      }
-
-      // 启动预热只看一次全天总结；实时监听才按 batchSize 进入完整 workflow。
-      if (buffer.length > 0) {
-        await runPreheatSummary(groupId, buffer);
-        messageBuffers.set(groupId, []);
-      } else {
-        messageBuffers.set(groupId, buffer);
-        console.log("   今日没有待分析消息");
-      }
-    } catch (err) {
-      console.error("   ⚠️ 拉取历史失败:", err);
-      messageBuffers.set(groupId, []);
-    }
+    messageBuffers.set(groupId, []);
   }
 
-  console.log("✅ 预热完成，开始监听实时消息\n");
+  console.log("✅ 开始监听实时消息\n");
 
   client.addEventHandler(
     async (event: NewMessageEvent) => {
