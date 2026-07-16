@@ -218,6 +218,14 @@ function getBatchTimeRange(buffer: BufferedMessage[]): {
   );
 }
 
+// 群聊节奏：发言密度（条/分钟）作为烈度的客观依据喂给模型。
+function describePace(buffer: BufferedMessage[]): string {
+  const { startTime, endTime } = getBatchTimeRange(buffer);
+  const spanMin = Math.max((endTime - startTime) / 60000, 0.1);
+  const perMin = buffer.length / spanMin;
+  return `【群聊节奏】${buffer.length} 条消息集中在约 ${spanMin.toFixed(1)} 分钟内（约 ${perMin.toFixed(1)} 条/分钟）。发言越密集通常情绪烈度越高。`;
+}
+
 async function main() {
   if (!readSessionString()) {
     console.error("❌ 未找到 session，请先运行: pnpm auth");
@@ -313,8 +321,10 @@ async function main() {
     let initialTier: AnalysisTier | null = null;
     let persistedBatchId: number | null = null;
 
+    const paceNote = describePace(buffer);
+
     try {
-      const quick = await analyzeBatchScore(buffer);
+      const quick = await analyzeBatchScore(buffer, paceNote);
       quickResult = quick;
       const quickIntensity = emotionIntensity(quick.score, quick.heat);
 
@@ -349,7 +359,7 @@ async function main() {
       const marketContext = rule.includeMarket
         ? await buildBatchMarketContext(buffer)
         : NO_MARKET_CONTEXT;
-      const result = await analyzeBatch(buffer, marketContext);
+      const result = await analyzeBatch(buffer, marketContext, paceNote);
       const effectiveRule = resolveEffectiveTier(
         rule,
         emotionIntensity(result.score, result.heat),

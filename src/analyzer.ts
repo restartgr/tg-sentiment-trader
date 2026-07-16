@@ -204,6 +204,7 @@ export interface AssetDetailAnalysis {
 
 export async function analyzeBatchScore(
   messages: { username: string; text: string }[],
+  paceNote = "",
 ): Promise<BatchScoreResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
   const system = `你是散户投机群的轻量情绪评分器。判断这批消息的群体情绪，输出两根相互独立的轴：方向(score) 和 烈度(heat)。不识别资产、不做行情/新闻/技术分析、不编造任何价位。输出务必极简。
@@ -212,6 +213,7 @@ export async function analyzeBatchScore(
 - score（方向轴，-1~+1）：群体是看涨还是看跌。多空分歧僵持 → 落在中性区 -0.2~+0.2。
 - heat（烈度轴，0~1）：群体情绪有多激烈/极端，跟方向无关。吵架、对骂、集体破防、疯狂刷屏、亢奋梭哈、绝望割肉、激烈对喷，都算高烈度。
 - 关键：吵架 / 激烈多空对喷 / 情绪爆发 时，score 可能因为方向分歧而接近中性，但 heat 必须打高（≥0.6），不要因为方向不明就把整体情绪判成平淡。
+- 若提供了群聊节奏信息，发言越密集（条/分钟越高）通常烈度越高，要体现在 heat 上。
 
 【关键判别】
 - 先判断痛苦/亢奋来自多头还是空头，不要只看"跌懵了""求放过""完了"这类字面词。
@@ -250,7 +252,7 @@ comment 写一句很短的中文点评，低于 30 字，说明方向与烈度�
   try {
     const raw = await chat(
       system,
-      `以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
+      `${paceNote ? `${paceNote}\n\n` : ""}以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
       1000,
       "light",
     );
@@ -284,6 +286,7 @@ export async function buildBatchMarketContext(
 export async function analyzeBatch(
   messages: { username: string; text: string }[],
   marketContext: string,
+  paceNote = "",
 ): Promise<BatchAnalysisResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
   const system = `你是散户投机群的情绪分析器，同时精通全球股票、期货、加密货币的代码和俗称。
@@ -312,6 +315,7 @@ score 评分规则：
 
 heat 评分规则：
 - 0.0~0.3：平淡；0.3~0.6：有情绪未爆发；0.6~0.85：吵架/对喷/亢奋或恐慌；0.85~1.0：全群炸锅、极端破防
+- 若提供了群聊节奏信息，发言越密集（条/分钟越高）通常烈度越高，要体现在 heat 上。
 
 【重点 - 情绪分析】
 dominantEmotion: 一个词概括主导情绪（如恐慌/亢奋/迷茫/分歧/麻木/FOMO/绝望/侥幸/狂热/犹豫 等）
@@ -319,7 +323,7 @@ emotionDetail: 2-3 句话客观描述情绪状态本身，只观察情绪倾向�
 divergence: 描述多空分歧或共识程度（如"高度一致看空"/"多空分歧明显"/"情绪由空转多"），只说情绪状态，不评价人。
 crowdBehavior: 描述群体的情绪反应模式，只说情绪行为（如"追涨情绪上升"/"恐慌情绪蔓延"/"观望情绪占主导"/"FOMO情绪抬头"），禁止使用'嘴硬''被套装死''独立判断弱''盲从''韭菜'等带贬义/评判的措辞。
 hotTopics: 讨论焦点关键词，最多 5 个（如["美联储","英伟达财报","抄底","止损"]）
-riskWarning: 仅从情绪角度提示风险（如"情绪过于一致，反转概率升高"），不评价群成员。
+riskWarning: 仅从情绪角度提示风险（如"情绪过于一致，反转概率升高"/"发言密集情绪过热，警惕反向"），不评价群成员。
 
 【辅助 - 资产识别】
 topAssets: 只挑出讨论最热、提及最多的最多 3 个资产，不要全部列举。
@@ -327,11 +331,13 @@ topAssets: 只挑出讨论最热、提及最多的最多 3 个资产，不要全
 每个资产返回：nickname（群里叫法）、name（正式名称）、ticker（交易代码）、exchange。
 不确定代码 ticker 填"未知"。
 
-signal：根据情绪质量判断操作方向。
-- 极端且一致（情绪化、无脑梭哈/割肉）→ 反向
-- 有理有据（带基本面/技术面分析）→ 跟随
-- 分歧或中性 → 观望
-内容需含：操作方向、理由、具体建议。
+signal：结合烈度(heat)和方向(score)判断操作方向，两者一起看。
+- 高烈度 + 方向极端一致（情绪化无脑梭哈/割肉、疯狂追涨杀跌）→ 反向（情绪过热，易反转）。
+- 高烈度 + 多空激烈分歧/吵架（方向中性但很热）→ 情绪过热、方向未定，倾向反向或严格观望等方向明朗，不要顺势追。
+- 低烈度 + 有理有据（带基本面/技术面分析）→ 跟随。
+- 低烈度 + 分歧或中性 → 观望。
+- 总体原则：发言越密集、越情绪化（heat 越高），越偏反向；理性、有依据、节奏平缓才考虑跟随。
+内容需含：操作方向、理由（须点明当前烈度与发言节奏）、具体建议。
 如果 topAssets 不为空，signal 必须逐个覆盖 topAssets 中的每个资产，不要只写最热门的一个。
 signal 格式必须包含：
 【跟随/反向/观望】一句总判断；
@@ -357,7 +363,7 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
   try {
     const raw = await chat(
       system,
-      `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
+      `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n${paceNote ? `${paceNote}\n\n` : ""}以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
       3500,
     );
     const json = parseJSON(raw);
