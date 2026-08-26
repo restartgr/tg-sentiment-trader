@@ -1,6 +1,7 @@
 import { config } from "./config";
-import { analyzePanicHype, PanicHypeResult } from "./analyzer";
+import { analyzePanicHype } from "./analyzer";
 import { buildBenchmarkMarketContext } from "./market-data";
+import { formatPanicReport } from "./panic-report-format";
 import {
   createTelegramClient,
   fetchMessagesSince,
@@ -17,44 +18,6 @@ import {
 
 const START_MIN = 9 * 60;
 const END_OF_DAY_MIN = 24 * 60;
-
-function formatReport(
-  result: PanicHypeResult,
-  msgCount: number,
-  participantCount: number,
-  dateLabel: string,
-  currentTime: string,
-): string {
-  const bar = (v: number) => "█".repeat(Math.round(v / 10)) + "░".repeat(10 - Math.round(v / 10));
-  const sideEmoji = result.dominantSide === "多" ? "📈" : result.dominantSide === "空" ? "📉" : "↔️";
-  const stabilityEmoji = result.stabilityScore < 30 ? "🌋" : result.stabilityScore < 50 ? "⚠️" : result.stabilityScore < 70 ? "😬" : "🟢";
-
-  const lines: string[] = [
-    `👻 鬼叫指数日报 · ${dateLabel} · 09:00-${currentTime} JST`,
-    `分析消息：${msgCount} 条 | 参与者：${participantCount} 人`,
-    ``,
-    `${stabilityEmoji} 市场稳定性  ${bar(result.stabilityScore)}  ${result.stabilityScore}/100（${result.stabilityLabel}）`,
-    `😱 鬼叫指数    ${bar(result.panicIndex)}  ${result.panicIndex}/100`,
-    `🔥 全群烈度    ${bar(result.heat)}  ${result.heat}/100（${result.heatDriver}）`,
-    ``,
-    `${sideEmoji} 主导方向：${result.dominantSide}方  |  做多 ${result.longBias}%  /  做空 ${result.shortBias}%`,
-    `😱 鬼叫 ${result.panicCount} 人  |  💰 炫耀 ${result.hypeCount} 人`,
-    ``,
-    `📊 情绪演变`,
-    result.phaseAnalysis,
-    ``,
-    `👥 群体行为`,
-    result.crowdBehavior,
-    ``,
-    `📝 总结`,
-    result.summary,
-  ];
-
-  lines.push(``, `⚡ 风险提示`, result.warning);
-  lines.push(``, `🔮 行情推演`, result.marketOutlook);
-
-  return lines.join("\n");
-}
 
 async function main() {
   if (!readSessionString()) {
@@ -131,7 +94,7 @@ async function main() {
         `独立发言人数：${participantCount}`,
       ].join("；");
       const result = await analyzePanicHype(buffer, marketContext, statsContext);
-      const report = formatReport(
+      const report = formatPanicReport(
         result,
         buffer.length,
         participantCount,

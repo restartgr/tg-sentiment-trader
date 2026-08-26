@@ -93,7 +93,7 @@ function parseJSON(raw: string): any {
     // 值中未转义的裸双引号 -> 单引号
     (s: string) =>
       s.replace(
-        /("(?:quote|topQuote|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|marketOutlook|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
+        /("(?:quote|topQuote|oneLiner|summary|discussionSummary|phaseAnalysis|marketAnalysis|sentimentVsMarket|marketOutlook|crowdBehavior|marketInsight|warning|contrarian|mood|news|technical|emotionSignal|tradeView|levels|risk|reasoning|action|comment|label|signal|name|nickname|ticker|exchange|title|topic|emotionDetail|divergence|riskWarning|dominantEmotion)":\s*")([\s\S]*?)("(?:,|\s*[}\]]))/g,
         (_m, open, value, close) =>
           open + value.replace(/(?<!\\)"/g, "'") + close,
       ),
@@ -411,7 +411,9 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
       emotionDetail: json.emotionDetail ?? "",
       divergence: json.divergence ?? "",
       crowdBehavior: json.crowdBehavior ?? "",
-      hotTopics: Array.isArray(json.hotTopics) ? json.hotTopics.slice(0, 5) : [],
+      hotTopics: Array.isArray(json.hotTopics)
+        ? json.hotTopics.slice(0, 5)
+        : [],
       riskWarning: json.riskWarning ?? "",
       marketInsight: json.marketInsight ?? "",
       summary: json.summary ?? "",
@@ -593,7 +595,10 @@ async function safeBuildAssetMarketContext(asset: AssetInfo): Promise<string> {
   try {
     return await buildAssetMarketContext(asset);
   } catch (err) {
-    console.error(`单票行情上下文构建失败 ${asset.nickname}(${asset.ticker}):`, err);
+    console.error(
+      `单票行情上下文构建失败 ${asset.nickname}(${asset.ticker}):`,
+      err,
+    );
     return `${asset.nickname}/${asset.name}(${asset.ticker}, ${asset.exchange})：行情上下文构建失败，禁止编造当前价、新闻、支撑位、压力位、目标价。`;
   }
 }
@@ -615,6 +620,7 @@ export interface PanicRankEntry {
 }
 
 export interface PanicHypeResult {
+  oneLiner: string; // 一句话人话结论
   panicIndex: number; // 0-100：交易相关的鬼叫/炫耀越强越高
   heat: number; // 0-100：全部群消息的群体烈度
   heatDriver: HeatDriver;
@@ -640,9 +646,20 @@ export async function analyzePanicHype(
   statsContext = "",
 ): Promise<PanicHypeResult> {
   const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
-  const system = `你是专业的散户群聊行为分析师，擅长从聊天记录中识别极端情绪行为，并结合真实大盘行情判断市场状态。
+  const system = `你是专业的散户群聊行为分析师，也是一位表达自然、有观察力的财经编辑。你擅长从聊天记录中识别极端情绪行为，并结合真实大盘行情判断市场状态。
 
 本报告只分析今天 JST 09:00 截至统计时刻的数据。鬼叫指数与群体烈度是两个不同指标，不得混为一谈。
+
+━━━ 表达风格 ━━━
+- oneLiner：用一句自然的“人话”讲清鬼叫指数、全群烈度和主导方向之间最重要的关系，30~60字；不要写成研报摘要。
+- phaseAnalysis、crowdBehavior 和 summary 要像一个懂市场的人在复盘群聊：句式有长有短，结论具体，允许使用一两个贴切的口语表达或轻微比喻，例如“空方接管了麦克风”“情绪跑在逻辑前面”。不要堆梗，不要起综艺式标题，不要使用“今日片名”“天气预报”“下一集”等包装。
+- 每段先说观察，再说这意味着什么；避免连续使用“呈现、构成、处于、整体、明显、主要由”等报告腔词汇。
+- 趣味来自准确观察，不来自嘲笑亏损者。不得点名、引用代表性发言或输出个人榜单内容到 oneLiner 及正文分析。
+- 事实、指标和因果必须严谨；不要为了好笑编造行情、事件或群体共识。
+
+━━━ 时间与事实边界 ━━━
+- 严格服从【消息统计】中的截止时刻。截止时刻在午间时，不得描写“午后”；未到尾盘时，不得描写“尾盘”；不得把未来推演写成已经发生。
+- 群聊中提到的新闻、诉讼、财报等只能表述为“群内讨论/消息称”，除非【大盘行情上下文】明确证实。不得把聊天传言升级为已核实事实。
 
 ━━━ 鬼叫指数：只看交易情绪爆发 ━━━
 识别鬼叫、炫耀和排行榜时，只分析纯情绪化的交易发言，忽略以下内容：
@@ -687,13 +704,8 @@ export async function analyzePanicHype(
 - marketOutlook：只依据提供的大盘行情和群体情绪，推演接下来一个交易时段的主情景；必须包含依据、失效条件和高/中/低置信度。极端情绪只能作为风险因子，不能机械地当成反向信号，也不能给出买卖、仓位或目标点位建议。
 - warning：提示数据覆盖、单一群体样本、行情波动或情绪误判风险。
 
-━━━ 鬼叫排行榜 ━━━
-leaderboard：统计每个有情绪发言的用户，最多返回10人，按情绪强度综合排名（强烈鬼叫/炫耀权重更高）。
-给每人起一个贴切称号，例如：爆仓王、割肉侠、炫耀大师、韭菜精、空头刺客、死扛侠、恐慌大叔等。
-topQuote取该用户最具代表性的一句情绪发言（≤30字）。
-
 只返回JSON，不要其他文字。stabilityScore、stabilityLabel 和 dominantSide 由程序计算，不需要返回：
-{"panicIndex":0-100整数,"heat":0-100整数,"heatDriver":"上涨|下跌|多空分歧|其他或不明","panicCount":整数,"hypeCount":整数,"longBias":0-100整数,"shortBias":0-100整数,"events":[{"type":"鬼叫|炫耀","quote":"原文片段","side":"多|空|不明","intensity":"轻微|中等|强烈|极端"}],"phaseAnalysis":"描述情绪演变（2-3句）","crowdBehavior":"描述群体行为特征（2-3句）","summary":"整体总结（3-4句，区分鬼叫指数与全群烈度）","warning":"风险提示（1句）","marketOutlook":"条件式行情推演（2-3句）","leaderboard":[{"username":"用户名","score":整数,"panicCount":整数,"hypeCount":整数,"topQuote":"最具代表性一句","label":"称号"}]}`;
+{"oneLiner":"一句话人话结论","panicIndex":0-100整数,"heat":0-100整数,"heatDriver":"上涨|下跌|多空分歧|其他或不明","panicCount":整数,"hypeCount":整数,"longBias":0-100整数,"shortBias":0-100整数,"events":[{"type":"鬼叫|炫耀","quote":"原文片段","side":"多|空|不明","intensity":"轻微|中等|强烈|极端"}],"phaseAnalysis":"自然、有节奏地描述截止时刻前的情绪演变（2-3句）","crowdBehavior":"具体、有观察感地描述群体行为（2-3句）","summary":"自然口语化的整体总结（3-4句，区分鬼叫指数与全群烈度）","warning":"风险提示（1句）","marketOutlook":"条件式行情推演（2-3句）","leaderboard":[{"username":"用户名","score":整数,"panicCount":整数,"hypeCount":整数,"topQuote":"最具代表性一句","label":"称号"}]}`;
 
   try {
     const raw = await chat(
@@ -719,6 +731,7 @@ topQuote取该用户最具代表性的一句情绪发言（≤30字）。
     };
 
     return {
+      oneLiner: typeof json.oneLiner === "string" ? json.oneLiner : "",
       panicIndex: metrics.panicIndex,
       heat: metrics.heat,
       heatDriver: coerceHeatDriver(json.heatDriver),
@@ -740,6 +753,7 @@ topQuote取该用户最具代表性的一句情绪发言（≤30字）。
   } catch (e) {
     console.error("鬼叫指数解析失败：", e);
     return {
+      oneLiner: "本期分析未成功生成，先不让沉默的数据强行开口。",
       panicIndex: 0,
       heat: 0,
       heatDriver: "其他或不明",
@@ -762,15 +776,15 @@ topQuote取该用户最具代表性的一句情绪发言（≤30字）。
 }
 
 export interface BombResult {
-  bombIndex: number;        // 0-100：越高越亢奋（危险）
-  fearIndex: number;        // 0-100：越高越恐慌（机会）
+  bombIndex: number; // 0-100：越高越亢奋（危险）
+  fearIndex: number; // 0-100：越高越恐慌（机会）
   signal: "强烈卖出" | "减仓" | "观望" | "加仓" | "强烈买入";
   signalEmoji: string;
-  mood: string;             // 当前情绪状态描述
-  keyMessages: string[];    // 最能体现情绪的发言（不超过5条）
-  summary: string;          // 整体分析（3-4句）
-  action: string;           // 具体操作建议
-  reasoning: string;        // 逆向逻辑说明
+  mood: string; // 当前情绪状态描述
+  keyMessages: string[]; // 最能体现情绪的发言（不超过5条）
+  summary: string; // 整体分析（3-4句）
+  action: string; // 具体操作建议
+  reasoning: string; // 逆向逻辑说明
 }
 
 export async function analyzeBombUser(
@@ -813,7 +827,11 @@ keyMessages：挑出最能体现该用户今日情绪的原话（≤5条，≤40
 
   const clamp = (v: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
   try {
-    const raw = await chat(system, `以下是 @${username} 今日全部发言：\n\n${formatted}`, 4000);
+    const raw = await chat(
+      system,
+      `以下是 @${username} 今日全部发言：\n\n${formatted}`,
+      4000,
+    );
     console.log("📥 炸弹指数原始返回（前200字）：", raw.slice(0, 200));
     const json = parseJSON(raw);
     return {
@@ -830,8 +848,15 @@ keyMessages：挑出最能体现该用户今日情绪的原话（≤5条，≤40
   } catch (e) {
     console.error("炸弹指数解析失败：", e);
     return {
-      bombIndex: 0, fearIndex: 0, signal: "观望", signalEmoji: "⚪",
-      mood: "解析失败", keyMessages: [], summary: "解析失败", action: "", reasoning: "",
+      bombIndex: 0,
+      fearIndex: 0,
+      signal: "观望",
+      signalEmoji: "⚪",
+      mood: "解析失败",
+      keyMessages: [],
+      summary: "解析失败",
+      action: "",
+      reasoning: "",
     };
   }
 }

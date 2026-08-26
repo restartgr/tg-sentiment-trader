@@ -70,6 +70,20 @@ pnpm db:inspect
 - `getBatchesInRange()`：读取指定范围的分析结果。
 - `getDatabaseStats()`：统计消息、批次和关联数量。
 
+## MCP 查询入口
+
+项目提供了一个最小 MCP server，用来把本地 SQLite 里的情绪记忆暴露给 agent 查询：
+
+```bash
+pnpm mcp
+```
+
+当前只注册了一个只读 tool：
+
+- `query_recent_sentiment`：返回最近的情绪分析批次，默认 5 条，最多 20 条；可选传入 `groupId` 过滤群组。
+
+这个 MCP server 只读取本地数据库，不连接 Telegram，也不会调用大模型。后续可以按同样模式继续添加 `search_messages`、`query_batches`、`explain_batch` 等查询工具。
+
 ### 资产俗称映射（可选但推荐）
 
 把群里对资产的叫法映射到正式代码，能显著提升识别和行情命中率。复制 `assets.demo.json` 为 `assets.json` 并按需修改（存在 `assets.json` 时优先用它，否则回退到 demo）：
