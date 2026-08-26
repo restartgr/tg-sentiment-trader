@@ -23,7 +23,7 @@
 
 除了实时监控，还有两条互相独立的按需分析命令（同样只发到「已保存消息」）：
 
-- **`pnpm panic`** — 👻 鬼叫指数日报：识别群里的恐慌/炫耀情绪爆发，给出市场稳定性评分和逆向建议。
+- **`pnpm panic`** — 👻 鬼叫指数日报：区分交易鬼叫与全群烈度，结合真实大盘行情给出稳定性评分和条件式行情推演。
 - **`pnpm summary`** — 📋 今日综合总结：一次性分析当天 JST 09:00 至执行时刻的全部群消息，并结合配置的大盘行情总结普通讨论、情绪和市场状态；不包含鬼叫指数或个股详情。
 
 ## 快速开始
@@ -69,6 +69,20 @@ pnpm db:inspect
 - `searchMessages()`：按群组、关键词和时间范围搜索。
 - `getBatchesInRange()`：读取指定范围的分析结果。
 - `getDatabaseStats()`：统计消息、批次和关联数量。
+
+## MCP 查询入口
+
+项目提供了一个最小 MCP server，用来把本地 SQLite 里的情绪记忆暴露给 agent 查询：
+
+```bash
+pnpm mcp
+```
+
+当前只注册了一个只读 tool：
+
+- `query_recent_sentiment`：返回最近的情绪分析批次，默认 5 条，最多 20 条；可选传入 `groupId` 过滤群组。
+
+这个 MCP server 只读取本地数据库，不连接 Telegram，也不会调用大模型。后续可以按同样模式继续添加 `search_messages`、`query_batches`、`explain_batch` 等查询工具。
 
 ### 资产俗称映射（可选但推荐）
 

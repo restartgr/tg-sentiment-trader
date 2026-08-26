@@ -48,6 +48,9 @@ function formatReport(
     `🔎 情绪与行情`,
     result.sentimentVsMarket,
     ``,
+    `🔮 行情推演`,
+    result.marketOutlook,
+    ``,
     `🏷️ 讨论焦点`,
     topics,
     ``,
@@ -112,16 +115,15 @@ async function main(): Promise<void> {
         continue;
       }
 
+      // 按 senderId 去重（同名不同人不会被合并）；无 senderId 再退回 name。
       const messages: { username: string; text: string }[] = [];
+      const participantKeys = new Set<string>();
       for (const message of filtered) {
-        messages.push({
-          username: await getSenderName(message),
-          text: message.text!.trim(),
-        });
+        const username = await getSenderName(message);
+        messages.push({ username, text: message.text!.trim() });
+        participantKeys.add(message.senderId?.toString() ?? `name:${username}`);
       }
-      const participantCount = new Set(
-        messages.map((message) => message.username),
-      ).size;
+      const participantCount = participantKeys.size;
       const statsContext = [
         `统计区间：JST 09:00-${currentTime}`,
         `消息数：${messages.length}`,
