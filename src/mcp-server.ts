@@ -5,6 +5,7 @@ import {
   closeDatabase,
   getBatchesInRange,
   initDatabase,
+  searchMessages,
   StoredBatch,
 } from "./db";
 
@@ -68,6 +69,73 @@ server.registerTool(
             {
               count: batches.length,
               batches,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  },
+);
+
+server.registerTool(
+  "search_messages",
+  {
+    title: "search related messages",
+    description:
+      "Search historical Telegram messages in the local SQLite memory by keyword, group, or time range. This tool is read-only and does not call any LLM.",
+    inputSchema: {
+      groupId: z
+        .string()
+        .optional()
+        .describe("Optional normalized Telegram group id to filter by."),
+      query: z
+        .string()
+        .trim()
+        .min(1)
+        .optional()
+        .describe("Optional keyword to search for in message text."),
+      startTime: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Optional inclusive start time as a Unix timestamp."),
+      endTime: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Optional exclusive end time as a Unix timestamp."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(20)
+        .optional()
+        .describe("Maximum number of messages to return. Defaults to 20."),
+    },
+  },
+  async ({ groupId, query, startTime, endTime, limit }) => {
+    initDatabase();
+
+    const messages = searchMessages({
+      groupId,
+      query,
+      startTime,
+      endTime,
+      limit: limit ?? 20,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              count: messages.length,
+              messages,
             },
             null,
             2,
