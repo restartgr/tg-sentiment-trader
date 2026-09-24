@@ -2,11 +2,7 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 
-const DEFAULT_DB_FILE = path.join(
-  process.cwd(),
-  "data",
-  "tg-sentiment.db",
-);
+const DEFAULT_DB_FILE = path.join(process.cwd(), "data", "tg-sentiment.db");
 
 let database: Database.Database | null = null;
 
@@ -154,7 +150,8 @@ function getDatabase(): Database.Database {
 export function saveMessage(input: MessageInput): number {
   const db = getDatabase();
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO messages (
       tg_message_id,
       group_id,
@@ -169,7 +166,8 @@ export function saveMessage(input: MessageInput): number {
       text = excluded.text,
       message_ts = excluded.message_ts,
       updated_at = CURRENT_TIMESTAMP
-  `).run(
+  `,
+  ).run(
     input.tgMessageId,
     input.groupId,
     input.senderId,
@@ -179,9 +177,7 @@ export function saveMessage(input: MessageInput): number {
   );
 
   const row = db
-    .prepare(
-      "SELECT id FROM messages WHERE group_id = ? AND tg_message_id = ?",
-    )
+    .prepare("SELECT id FROM messages WHERE group_id = ? AND tg_message_id = ?")
     .get(input.groupId, input.tgMessageId) as { id: number } | undefined;
 
   if (!row) {
@@ -194,13 +190,15 @@ export function saveMessage(input: MessageInput): number {
 
 export function hasCompletedAnalysis(messageId: number): boolean {
   const row = getDatabase()
-    .prepare(`
+    .prepare(
+      `
       SELECT 1
       FROM batch_messages AS bm
       JOIN batches AS b ON b.id = bm.batch_id
       WHERE bm.message_id = ? AND b.status = 'completed'
       LIMIT 1
-    `)
+    `,
+    )
     .get(messageId);
 
   return row != null;
@@ -243,11 +241,13 @@ export function searchMessages(query: MessageQuery = {}): StoredMessage[] {
     params.push(query.endTime);
   }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const where =
+    conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(normalizeLimit(query.limit, 20));
 
   return getDatabase()
-    .prepare(`
+    .prepare(
+      `
       SELECT
         id,
         tg_message_id AS tgMessageId,
@@ -260,7 +260,8 @@ export function searchMessages(query: MessageQuery = {}): StoredMessage[] {
       ${where}
       ORDER BY message_ts DESC, id DESC
       LIMIT ?
-    `)
+    `,
+    )
     .all(...params) as StoredMessage[];
 }
 
@@ -285,11 +286,13 @@ export function getBatchesInRange(query: BatchQuery = {}): StoredBatch[] {
     params.push(query.status);
   }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const where =
+    conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   params.push(normalizeLimit(query.limit, 20));
 
   return getDatabase()
-    .prepare(`
+    .prepare(
+      `
       SELECT
         id,
         group_id AS groupId,
@@ -309,20 +312,23 @@ export function getBatchesInRange(query: BatchQuery = {}): StoredBatch[] {
       ${where}
       ORDER BY created_at DESC, id DESC
       LIMIT ?
-    `)
+    `,
+    )
     .all(...params) as StoredBatch[];
 }
 
 export function getDatabaseStats(): DatabaseStats {
   const row = getDatabase()
-    .prepare(`
+    .prepare(
+      `
       SELECT
         (SELECT COUNT(*) FROM messages) AS messages,
         (SELECT COUNT(*) FROM batches) AS batches,
         (SELECT COUNT(*) FROM batches WHERE status = 'completed') AS completedBatches,
         (SELECT COUNT(*) FROM batches WHERE status = 'failed') AS failedBatches,
         (SELECT COUNT(*) FROM batch_messages) AS batchMessageLinks
-    `)
+    `,
+    )
     .get() as DatabaseStats;
 
   return row;
@@ -382,6 +388,67 @@ export function saveBatch(input: BatchInput): number {
   });
 
   return insertTransaction();
+}
+
+export function getBatchById(batchId: number): StoredBatch | null {
+  const row = getDatabase()
+    .prepare(
+      `
+      SELECT
+        id,
+        group_id AS groupId,
+        start_time AS startTime,
+        end_time AS endTime,
+        quick_score AS quickScore,
+        final_score AS finalScore,
+        initial_tier AS initialTier,
+        final_tier AS finalTier,
+        dominant_emotion AS dominantEmotion,
+        summary,
+        market_insight AS marketInsight,
+        status,
+        error_message AS errorMessage,
+        created_at AS createdAt
+      FROM batches
+      WHERE id = ?
+    `,
+    )
+    .get(batchId) as StoredBatch | undefined;
+
+  return row ?? null;
+}
+
+export function getBatchMessageCount(batchId: number): number {
+  const row = getDatabase()
+    .prepare("SELECT COUNT(*) AS count FROM batch_messages WHERE batch_id = ?")
+    .get(batchId) as { count: number };
+
+  return row.count;
+}
+
+export function getBatchMessages(
+  batchId: number,
+  limit?: number,
+): StoredMessage[] {
+  return getDatabase()
+    .prepare(
+      `
+      SELECT
+        m.id,
+        m.tg_message_id AS tgMessageId,
+        m.group_id AS groupId,
+        m.sender_id AS senderId,
+        m.username,
+        m.text,
+        m.message_ts AS messageTs
+      FROM batch_messages AS bm
+      JOIN messages AS m ON m.id = bm.message_id
+      WHERE bm.batch_id = ?
+      ORDER BY bm.position ASC
+      LIMIT ?
+    `,
+    )
+    .all(batchId, normalizeLimit(limit, 20)) as StoredMessage[];
 }
 
 export function closeDatabase(): void {
