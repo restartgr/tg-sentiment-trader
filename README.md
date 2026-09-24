@@ -78,11 +78,20 @@ pnpm db:inspect
 pnpm mcp
 ```
 
-当前只注册了一个只读 tool：
+当前注册了四个只读 tools：
 
 - `query_recent_sentiment`：返回最近的情绪分析批次，默认 5 条，最多 20 条；可选传入 `groupId` 过滤群组。
+- `search_messages`：按关键词、群组或时间范围搜索历史消息。
+- `query_batches`：按群组、时间范围和状态筛选分析批次。
+- `explain_batch`：返回指定批次、关联来源消息、`sourceMessageIds` 和截断状态。
 
-这个 MCP server 只读取本地数据库，不连接 Telegram，也不会调用大模型。后续可以按同样模式继续添加 `search_messages`、`query_batches`、`explain_batch` 等查询工具。
+这个 MCP server 只读取本地数据库，不连接 Telegram，也不会调用大模型。
+
+最小 Agent runner 会把这些 MCP tools 提供给模型，并循环执行模型选择的工具：
+
+```bash
+pnpm agent "找最近已完成批次并解释依据，列出 batchId 和 sourceMessageIds"
+```
 
 ### 资产俗称映射（可选但推荐）
 
@@ -105,6 +114,7 @@ pnpm mcp
 | `TG_TARGET_GROUPS` | 要监控的群组，逗号分隔。推荐用 username 或数字 chat id（invite link 会过期） |
 | `TG_MY_USER_ID` | 你自己的 Telegram User ID（发消息给 @userinfobot 获取） |
 | `ANTHROPIC_API_KEY` | Anthropic API Key（必填） |
+| `OPENAI_API_KEY` | OpenAI API Key（运行本地 Agent runner 时必填） |
 | `MODEL_LIGHT` / `MODEL_DEEP` | 模型分层（可选）：light 跑高频轻量评分，deep 跑深度分析（两者默认均为 `claude-sonnet-4-6`；Haiku 首轮评分偏差大，省钱可把 light 改回 `claude-haiku-4-5`） |
 | `SENTIMENT_BATCH_SIZE` | 每多少条消息分析一次（默认 20） |
 | `SIMPLE_ANALYSIS_MIN_ABS_SCORE` | 简单分析档下限（默认 0.5）：`>=` 进入深度分析但不调行情 |
@@ -124,6 +134,8 @@ pnpm mcp
 | `pnpm start` / `pnpm dev` | 启动实时情绪监控（`dev` 带热重载） |
 | `pnpm init-db` | 初始化本地 SQLite 数据库 |
 | `pnpm db:inspect` | 查看 SQLite 数据概览、最近消息和分析批次 |
+| `pnpm mcp` | 启动只读 MCP 查询 server |
+| `pnpm agent "问题"` | 运行本地 MCP Agent loop |
 | `pnpm summary` | 生成今天 JST 09:00 至当前的群聊综合总结和大盘分析 |
 | `pnpm panic` | 生成鬼叫指数日报 |
 | `pnpm build` | TypeScript 编译到 `dist/` |
