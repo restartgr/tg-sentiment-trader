@@ -87,11 +87,44 @@ pnpm mcp
 
 这个 MCP server 只读取本地数据库，不连接 Telegram，也不会调用大模型。
 
-最小 Agent runner 会把这些 MCP tools 提供给模型，并循环执行模型选择的工具：
+### 本地 MCP Agent Runner
+
+本地 Agent runner 使用 OpenAI Responses API，把上述 MCP tools 提供给模型，并循环执行模型选择的工具：
 
 ```bash
 pnpm agent "找最近已完成批次并解释依据，列出 batchId 和 sourceMessageIds"
 ```
+
+一条典型的多步查询链路是：
+
+```text
+用户问题
+→ LLM 选择 query_batches
+→ Runner 执行 MCP tool 并回传结果
+→ LLM 选择 explain_batch
+→ Runner 回传来源消息
+→ LLM 生成带 batchId 和 sourceMessageIds 的最终回答
+```
+
+Runner 当前具备以下边界和保护：
+
+- 模型可以决定是否调用 tool、调用哪个 tool、传入什么参数、是否继续下一轮以及何时生成最终回答。
+- 最多执行 5 个 LLM steps，超过限制后终止，避免无限 tool loop。
+- 每次 OpenAI 请求最多等待 30 秒，且不做 SDK 自动重试。
+- 未知 tool、请求超时和其他未处理错误会以非零退出码结束。
+- MCP 的 `isError` 会随 tool result 回传给模型；成功但 `count: 0` 的空结果不会被误判为执行错误。
+- 正常日志只记录 tool 名称、结果块数量和错误状态，不打印 Telegram 原始消息。
+- MCP 连接始终在 `finally` 中关闭。
+
+已手动验证：
+
+- 无需工具的单轮回答。
+- `search_messages` 返回 `count: 0` 时明确回答未找到，不编造内容。
+- `query_batches` 收到非法时间范围时返回 `isError: true`，由模型解释错误。
+- `query_batches → explain_batch → 最终回答` 的多步调用，最终回答包含真实来源 ID。
+- 请求超时后输出明确错误并返回退出码 1。
+
+当前 Runner 是本地 CLI，而不是 Telegram 对话 Bot。每次命令都会创建新会话；它尚未支持跨用户消息的持久化 history，也不会写入数据库或向 Telegram 发送消息。
 
 ### 资产俗称映射（可选但推荐）
 
