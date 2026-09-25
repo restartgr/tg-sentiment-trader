@@ -1,11 +1,14 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
 import path from "path";
 import OpenAI from "openai";
 import dotenv from "dotenv";
+import { APIConnectionTimeoutError } from "openai";
 
 dotenv.config();
 const MAX_STEPS = 5;
+const TIME_OUT_MS = 30000;
 const client = new Client({
   name: "tg-sentiment-agent",
   version: "0.1.0",
@@ -63,8 +66,8 @@ async function main() {
     for (let step = 0; step < MAX_STEPS; step++) {
       console.log(`Agent step: ${step + 1}`);
 
-      const response: OpenAI.Responses.Response =
-        await openai.responses.create({
+      const response: OpenAI.Responses.Response = await openai.responses.create(
+        {
           model: "gpt-5.6-sol",
           input: nextInput,
           previous_response_id: previousResponseId,
@@ -74,12 +77,15 @@ async function main() {
             effort: "low",
           },
           store: true,
-        });
+        },
+        {
+          timeout: TIME_OUT_MS,
+          maxRetries: 0,
+        },
+      );
 
       const functionCall = response.output.find(
-        (
-          item,
-        ): item is OpenAI.Responses.ResponseFunctionToolCall =>
+        (item): item is OpenAI.Responses.ResponseFunctionToolCall =>
           item.type === "function_call",
       );
 
@@ -92,13 +98,18 @@ async function main() {
         throw new Error(`找不到对应的tool: ${functionCall.name}`);
       }
 
+      console.log(`使用的 tool 名称：${functionCall.name}`);
       const toolResult = await client.callTool({
         name: functionCall.name,
         arguments: JSON.parse(functionCall.arguments),
       });
-      const content = toolResult.content as ToolTextContent[];
-      const text = content.map((item) => item.text).join("\n");
 
+      const content = toolResult.content as ToolTextContent[];
+
+      const text = content.map((item) => item.text).join("\n");
+      console.log(
+        `原始结果长度：${content?.length}，是否报错：${toolResult.isError}`,
+      );
       nextInput = [
         {
           type: "function_call_output",
@@ -115,5 +126,13 @@ async function main() {
     await client.close();
   }
 }
+const handleError = (err: unknown) => {
+  if (err instanceof APIConnectionTimeoutError) {
+    console.error("Request timed out.");
+  } else {
+    console.error(`other error: ${err}`);
+  }
+  process.exitCode = 1;
+};
 
-main().catch(console.error);
+main().catch(handleError);
