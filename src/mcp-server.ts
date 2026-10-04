@@ -38,50 +38,61 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
+export const queryRecentSentimentSchema = z.object({
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum number of recent batches to return. Defaults to 5."),
+  groupId: z
+    .string()
+    .optional()
+    .describe("Optional normalized Telegram group id to filter by."),
+});
+
+type QueryRecentSentimentInput = z.infer<
+  typeof queryRecentSentimentSchema
+>;
+
+export const handleQueryRecentSentiment = (
+  input: QueryRecentSentimentInput,
+): CallToolResult => {
+  const { limit, groupId } = input;
+  initDatabase();
+
+  const batches = getBatchesInRange({
+    limit: limit ?? 5,
+    groupId,
+  }).map(formatBatch);
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            count: batches.length,
+            batches,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+};
+
 server.registerTool(
   "query_recent_sentiment",
   {
     title: "Query Recent Sentiment",
     description:
       "Return recent Telegram sentiment analysis batches from the local SQLite memory. This is read-only and does not call any LLM.",
-    inputSchema: {
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
-        .optional()
-        .describe("Maximum number of recent batches to return. Defaults to 5."),
-      groupId: z
-        .string()
-        .optional()
-        .describe("Optional normalized Telegram group id to filter by."),
-    },
+    inputSchema: queryRecentSentimentSchema.shape,
   },
-  async ({ limit, groupId }) => {
-    initDatabase();
-
-    const batches = getBatchesInRange({
-      limit: limit ?? 5,
-      groupId,
-    }).map(formatBatch);
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              count: batches.length,
-              batches,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
-  },
+  async (input) => handleQueryRecentSentiment(input),
 );
 export const queryBatchesSchema = z.object({
   limit: z
@@ -167,71 +178,80 @@ server.registerTool(
   async (input) => handleQueryBatches(input),
 );
 
+export const searchMessagesSchema = z.object({
+  groupId: z
+    .string()
+    .optional()
+    .describe("Optional normalized Telegram group id to filter by."),
+  query: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Optional keyword to search for in message text."),
+  startTime: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Optional inclusive start time as a Unix timestamp."),
+  endTime: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Optional exclusive end time as a Unix timestamp."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum number of messages to return. Defaults to 20."),
+});
+
+type SearchMessagesInput = z.infer<typeof searchMessagesSchema>;
+
+export const handleSearchMessages = (
+  input: SearchMessagesInput,
+): CallToolResult => {
+  const { groupId, query, startTime, endTime, limit } = input;
+  initDatabase();
+
+  const messages = searchMessages({
+    groupId,
+    query,
+    startTime,
+    endTime,
+    limit: limit ?? 20,
+  });
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            count: messages.length,
+            messages,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+};
+
 server.registerTool(
   "search_messages",
   {
     title: "search related messages",
     description:
       "Search historical Telegram messages in the local SQLite memory by keyword, group, or time range. This tool is read-only and does not call any LLM.",
-    inputSchema: {
-      groupId: z
-        .string()
-        .optional()
-        .describe("Optional normalized Telegram group id to filter by."),
-      query: z
-        .string()
-        .trim()
-        .min(1)
-        .optional()
-        .describe("Optional keyword to search for in message text."),
-      startTime: z
-        .number()
-        .int()
-        .min(1)
-        .optional()
-        .describe("Optional inclusive start time as a Unix timestamp."),
-      endTime: z
-        .number()
-        .int()
-        .min(1)
-        .optional()
-        .describe("Optional exclusive end time as a Unix timestamp."),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
-        .optional()
-        .describe("Maximum number of messages to return. Defaults to 20."),
-    },
+    inputSchema: searchMessagesSchema.shape,
   },
-  async ({ groupId, query, startTime, endTime, limit }) => {
-    initDatabase();
-
-    const messages = searchMessages({
-      groupId,
-      query,
-      startTime,
-      endTime,
-      limit: limit ?? 20,
-    });
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              count: messages.length,
-              messages,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
-  },
+  async (input) => handleSearchMessages(input),
 );
 export const explainBatchSchema = z.object({
   batchId: z
