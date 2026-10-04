@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+
 import { z } from "zod";
 import {
   closeDatabase,
@@ -81,83 +83,88 @@ server.registerTool(
     };
   },
 );
+export const queryBatchesSchema = z.object({
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Maximum number of recent batches to return. Defaults to 20."),
+  groupId: z
+    .string()
+    .optional()
+    .describe("Optional normalized Telegram group id to filter by."),
+  startTime: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Optional inclusive start time as a Unix timestamp."),
+  endTime: z
+    .number()
+    .int()
+    .min(1)
+    .optional()
+    .describe("Optional exclusive end time as a Unix timestamp."),
+  status: z
+    .enum(["completed", "failed"])
+    .optional()
+    .describe("Optional normalized status to filter by"),
+});
 
+type QueryBatchesInput = z.infer<typeof queryBatchesSchema>;
+
+export const handleQueryBatches = (
+  input: QueryBatchesInput,
+): CallToolResult => {
+  const { startTime, endTime, limit, groupId, status } = input;
+  if (startTime && endTime && startTime >= endTime) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "开始时间必须早于结束时间，请调整查询范围。",
+        },
+      ],
+    };
+  }
+  initDatabase();
+
+  const batches = getBatchesInRange({
+    limit: limit ?? 20,
+    groupId,
+    startTime,
+    endTime,
+    status,
+  }).map(formatBatch);
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(
+          {
+            count: batches.length,
+            batches,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+};
 server.registerTool(
   "query_batches",
   {
     title: "Find Sentiment which meet the query",
     description:
       "Return Telegram sentiment analysis batches that meet the query from the local SQLite memory. This is read-only and does not call any LLM.",
-    inputSchema: {
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
-        .optional()
-        .describe(
-          "Maximum number of recent batches to return. Defaults to 20.",
-        ),
-      groupId: z
-        .string()
-        .optional()
-        .describe("Optional normalized Telegram group id to filter by."),
-      startTime: z
-        .number()
-        .int()
-        .min(1)
-        .optional()
-        .describe("Optional inclusive start time as a Unix timestamp."),
-      endTime: z
-        .number()
-        .int()
-        .min(1)
-        .optional()
-        .describe("Optional exclusive end time as a Unix timestamp."),
-      status: z
-        .enum(["completed", "failed"])
-        .optional()
-        .describe("Optional normalized status to filter by"),
-    },
+    inputSchema: queryBatchesSchema.shape,
   },
-  async ({ limit, groupId, startTime, endTime, status }) => {
-    if (startTime && endTime && startTime >= endTime) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text",
-            text: "开始时间必须早于结束时间，请调整查询范围。",
-          },
-        ],
-      };
-    }
-    initDatabase();
-
-    const batches = getBatchesInRange({
-      limit: limit ?? 20,
-      groupId,
-      startTime,
-      endTime,
-      status,
-    }).map(formatBatch);
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              count: batches.length,
-              batches,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
-  },
+  async (input) => handleQueryBatches(input),
 );
 
 server.registerTool(
@@ -226,6 +233,67 @@ server.registerTool(
     };
   },
 );
+export const explainBatchSchema = z.object({
+  batchId: z
+    .number()
+    .int()
+    .min(1)
+    .describe("the batch id which user mentioned"),
+  messageLimit: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .default(20)
+    .describe("Maximum number of messages to return. Defaults to 20."),
+});
+
+export const handleExplainBatch = (
+  input: z.infer<typeof explainBatchSchema>,
+): CallToolResult => {
+  const { batchId, messageLimit } = input;
+  initDatabase();
+  const batch = getBatchById(batchId);
+  if (!batch) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            found: false,
+            batch: null,
+            batchMessagesCount: 0,
+            sourceMessageCount: 0,
+            messages: [],
+            truncated: false,
+            sourceMessageIds: [],
+          }),
+        },
+      ],
+    };
+  } else {
+    const batchMessagesCount = getBatchMessageCount(batchId);
+    const messages = getBatchMessages(batchId, messageLimit);
+    const sourceMessageIds = messages.map((item) => item.id);
+    const sourceMessageCount = messages.length;
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            found: true,
+            batch,
+            batchMessagesCount,
+            sourceMessageCount,
+            messages,
+            truncated: sourceMessageCount < batchMessagesCount,
+            sourceMessageIds,
+          }),
+        },
+      ],
+    };
+  }
+};
 
 server.registerTool(
   "explain_batch",
@@ -233,64 +301,10 @@ server.registerTool(
     title: "Explain Sentiment Batch",
     description:
       "Return a stored Telegram sentiment analysis batch and a limited set of its associated source messages by batch ID. Use this tool to inspect the evidence behind an existing analysis result. This tool is read-only and does not call an LLM.",
-    inputSchema: {
-      batchId: z
-        .number()
-        .int()
-        .min(1)
-        .describe("the batch id which user mentioned"),
-      messageLimit: z
-        .number()
-        .int()
-        .min(1)
-        .max(20)
-        .default(20)
-        .describe("Maximum number of messages to return. Defaults to 20."),
-    },
+    inputSchema: explainBatchSchema.shape,
   },
   async ({ batchId, messageLimit }) => {
-    initDatabase();
-
-    const batch = getBatchById(batchId);
-    if (!batch) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              found: false,
-              batch: null,
-              batchMessagesCount: 0,
-              sourceMessageCount: 0,
-              messages: [],
-              truncated: false,
-              sourceMessageIds: [],
-            }),
-          },
-        ],
-      };
-    } else {
-      const batchMessagesCount = getBatchMessageCount(batchId);
-      const messages = getBatchMessages(batchId, messageLimit);
-      const sourceMessageIds = messages.map((item) => item.id);
-      const sourceMessageCount = messages.length;
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              found: true,
-              batch,
-              batchMessagesCount,
-              sourceMessageCount,
-              messages,
-              truncated: sourceMessageCount < batchMessagesCount,
-              sourceMessageIds,
-            }),
-          },
-        ],
-      };
-    }
+    return handleExplainBatch({ batchId, messageLimit });
   },
 );
 
@@ -301,8 +315,10 @@ async function main() {
   console.error("tg-sentiment-trader MCP server started");
 }
 
-main().catch((err) => {
-  console.error("MCP server failed:", err);
-  closeDatabase();
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("MCP server failed:", err);
+    closeDatabase();
+    process.exit(1);
+  });
+}
