@@ -6,6 +6,11 @@
 
 export type HeatDriver = "上涨" | "下跌" | "多空分歧" | "其他或不明";
 
+export const DEFAULT_ROUTING_THRESHOLDS = {
+  scoreMin: 0.5,
+  heatDeepMin: 0.6,
+} as const;
+
 export const HEAT_DRIVERS: HeatDriver[] = [
   "上涨",
   "下跌",

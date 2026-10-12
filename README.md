@@ -70,6 +70,18 @@ pnpm db:inspect
 - `getBatchesInRange()`：读取指定范围的分析结果。
 - `getDatabaseStats()`：统计消息、批次和关联数量。
 
+### 历史批次规则回放
+
+先从已有 batch 生成只含 quick score、heat 和历史档位的快照，再用固定快照回放路由判断：
+
+```bash
+pnpm replay:snapshot --batch 231
+pnpm replay --batch 231
+pnpm replay --batch 231 --heat-deep-min 0.4
+```
+
+快照保存在 `data/replay/fixtures/batch-<id>.json`，已存在时不会覆盖；回放报告另存于 `data/replay/reports/`。读取业务数据库时使用只读连接，回放本身只读取快照并复用生产路由函数，不调用模型、不访问 Telegram，也不发送告警。默认 score/heat 门槛分别为 0.5/0.6；报告记录本次实际门槛及快照 SHA-256。历史 batch 未保存完整原始门槛，因此新旧决策不同时不能直接判定为代码回归。若新规则要求 Deep，报告只写 `deep_required`，不推测 Deep 分析或最终档位。
+
 ## MCP 查询入口
 
 项目提供了一个最小 MCP server，用来把本地 SQLite 里的情绪记忆暴露给 agent 查询：
@@ -167,6 +179,8 @@ Runner 当前具备以下边界和保护：
 | `pnpm start` / `pnpm dev` | 启动实时情绪监控（`dev` 带热重载） |
 | `pnpm init-db` | 初始化本地 SQLite 数据库 |
 | `pnpm db:inspect` | 查看 SQLite 数据概览、最近消息和分析批次 |
+| `pnpm replay:snapshot --batch <id>` | 只读提取历史 batch 的规则回放快照 |
+| `pnpm replay --batch <id>` | 从快照生成独立的规则回放报告 |
 | `pnpm mcp` | 启动只读 MCP 查询 server |
 | `pnpm agent "问题"` | 运行本地 MCP Agent loop |
 | `pnpm summary` | 生成今天 JST 09:00 至当前的群聊综合总结和大盘分析 |
