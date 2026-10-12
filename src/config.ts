@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { DEFAULT_ROUTING_THRESHOLDS } from "./routing";
 dotenv.config();
 
 function requireEnv(key: string): string {
@@ -71,13 +72,16 @@ export const config = {
     // 简单分析档：>= 此值进入深度分析（但不调实时行情），< 此值仅发轻量总览
     simpleAnalysisMinAbsScore: parseFloatEnv(
       "SIMPLE_ANALYSIS_MIN_ABS_SCORE",
-      0.5,
+      DEFAULT_ROUTING_THRESHOLDS.scoreMin,
     ),
     // 监控档：>= 此值的深度分析会调取实时行情/斐波/ORB
     monitorMinAbsScore: parseFloatEnv("MONITOR_MIN_ABS_SCORE", 0.6),
     // 烈度触发深度分析：heat >= 此值即使 score 中性也进 Deep（与 score 阈值独立）。
     // 只表示"进入 Deep 去理解"，不代表要推送、更不代表可交易。
-    heatDeepThreshold: parseFloatEnv("HEAT_DEEP_THRESHOLD", 0.6),
+    heatDeepThreshold: parseFloatEnv(
+      "HEAT_DEEP_THRESHOLD",
+      DEFAULT_ROUTING_THRESHOLDS.heatDeepMin,
+    ),
     // 纯烈度告警的推送门槛：finalHeat >= 此值才推送"情绪过热"摘要（低于则只落库+日志）。
     heatPushThreshold: parseFloatEnv("HEAT_PUSH_THRESHOLD", 0.8),
     // 单票详细分析：>= 此值才逐个跑 Top 资产单票分析
