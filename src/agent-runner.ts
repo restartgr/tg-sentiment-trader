@@ -11,10 +11,13 @@ import {
   estimateModelCostUsd,
   MODEL_PRICING_AS_OF,
 } from "./agent-trace";
+import { isTransientModelError, ModelRequestTimeoutError, runModelRequest } from "./model-request";
+import { assertInputBudget, boundedToolOutput, toolCallKey } from "./agent-loop-guards";
 
 dotenv.config();
 const MAX_STEPS = 5;
 const TIME_OUT_MS = 30000;
+const TOOL_TIMEOUT_MS = 15000;
 const MODEL = "gpt-5.6-sol";
 const client = new Client({
   name: "tg-sentiment-agent",
@@ -33,16 +36,21 @@ const transport = new StdioClientTransport({
 
 async function main() {
   const question = process.argv.slice(2).join(" ").trim();
+  if (!question) throw new Error("请提供问题");
 
-  if (!question) {
-    throw new Error("请提供问题");
-  }
+  const controller = new AbortController();
+  const cancel = (name: string) => controller.abort(new Error(`Agent cancelled by ${name}`));
+  const onSigint = () => cancel("SIGINT");
+  const onSigterm = () => cancel("SIGTERM");
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  const { signal } = controller;
   console.log(`用户的问题是: ${question}`);
   // TODO 1：连接 MCP server
   try {
-    await client.connect(transport);
+    await client.connect(transport, { signal, timeout: TOOL_TIMEOUT_MS });
     // TODO 2：获取 tools
-    const { tools } = await client.listTools();
+    const { tools } = await client.listTools(undefined, { signal, timeout: TOOL_TIMEOUT_MS });
     const toolsName = tools.map((item) => item.name);
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -63,20 +71,41 @@ async function main() {
     );
 
     const runId = crypto.randomUUID();
-
     const context: OpenAI.Responses.ResponseInput = [
       {
         role: "user",
         content: question,
       },
     ];
+    const calledTools = new Set<string>();
     for (let step = 0; step < MAX_STEPS; step++) {
+      signal.throwIfAborted();
+      assertInputBudget(context, functionTools);
       console.log(`Agent step: ${step + 1}`);
 
       const modelStartedAt = performance.now();
       let response: OpenAI.Responses.Response;
       try {
-        response = await openai.responses.create(
+        response = await runModelRequest({
+          maxAttempts: 2,
+          attemptTimeoutMs: TIME_OUT_MS,
+          totalTimeoutMs: TIME_OUT_MS * 2 + 5_000,
+          shouldRetry: isTransientModelError,
+          signal,
+          onRetry: async (error, nextAttempt) => {
+            await appendTraceEvent({
+              runId,
+              step: step + 1,
+              finishedAt: new Date().toISOString(),
+              latencyMs: Math.round(performance.now() - modelStartedAt),
+              status: "error",
+              errorType: error instanceof Error ? error.name : "UnknownError",
+              errorMessage: `Model request retry ${nextAttempt} scheduled`,
+              eventType: "model_call",
+              model: MODEL,
+            });
+          },
+        }, ({ signal, timeoutMs }) => openai.responses.create(
           {
             model: MODEL,
             input: context,
@@ -88,11 +117,8 @@ async function main() {
             service_tier: "default",
             store: true,
           },
-          {
-            timeout: TIME_OUT_MS,
-            maxRetries: 0,
-          },
-        );
+          { timeout: timeoutMs, maxRetries: 0, signal },
+        ));
       } catch (error) {
         await appendTraceEvent({
           runId,
@@ -121,7 +147,6 @@ async function main() {
             cacheWriteInputTokens: cacheWriteInputTokens ?? 0,
           })
         : undefined;
-
       await appendTraceEvent({
         runId,
         step: step + 1,
@@ -155,6 +180,7 @@ async function main() {
       if (response.status !== "completed") {
         throw new Error(`Model response status: ${response.status}`);
       }
+      signal.throwIfAborted();
       for (const item of response.output) {
         if (
           item.type !== "message" &&
@@ -170,7 +196,14 @@ async function main() {
           item.type === "function_call",
       );
 
+      if (response.output.filter((item) => item.type === "function_call").length > 1) {
+        throw new Error("Agent received multiple tool calls in one model step");
+      }
+
       if (!functionCall) {
+        if (!response.output_text.trim()) {
+          throw new Error("Agent completed without an answer");
+        }
         console.log(`llm的结果是：${response.output_text}`);
         return;
       }
@@ -178,16 +211,26 @@ async function main() {
       if (!toolsName.includes(functionCall.name)) {
         throw new Error(`找不到对应的tool: ${functionCall.name}`);
       }
+      if (step === MAX_STEPS - 1) {
+        throw new Error(`Agent 超过最大执行步数: ${MAX_STEPS}`);
+      }
 
       console.log(`使用的 tool 名称：${functionCall.name}`);
       const toolStartedAt = performance.now();
       let toolResult: Awaited<ReturnType<Client["callTool"]>>;
       let content: Array<{ type: string; text?: string }>;
+      let toolArguments: Record<string, unknown>;
       try {
+        toolArguments = JSON.parse(functionCall.arguments) as Record<string, unknown>;
+        const key = toolCallKey(functionCall.name, toolArguments);
+        if (calledTools.has(key)) throw new Error(`Agent repeated tool call: ${functionCall.name}`);
+        calledTools.add(key);
+        signal.throwIfAborted();
         toolResult = await client.callTool({
           name: functionCall.name,
-          arguments: JSON.parse(functionCall.arguments),
-        });
+          arguments: toolArguments,
+        }, undefined, { signal, timeout: TOOL_TIMEOUT_MS });
+        signal.throwIfAborted();
         if (!Array.isArray(toolResult.content)) {
           throw new Error("MCP tool result is missing content");
         }
@@ -216,13 +259,14 @@ async function main() {
         },
         { isError: toolResult.isError === true, content },
       );
+      const modelToolOutput = boundedToolOutput(text);
       console.log(
         `原始结果长度：${content.length}，是否报错：${toolResult.isError}`,
       );
       context.push({
         type: "function_call_output",
         call_id: functionCall.call_id,
-        output: text,
+        output: modelToolOutput,
       });
     }
 
@@ -230,10 +274,12 @@ async function main() {
   } finally {
     // TODO 4：关闭连接
     await client.close();
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGTERM", onSigterm);
   }
 }
 const handleError = (err: unknown) => {
-  if (err instanceof APIConnectionTimeoutError) {
+  if (err instanceof APIConnectionTimeoutError || err instanceof ModelRequestTimeoutError) {
     console.error("Request timed out.");
   } else {
     console.error(`other error: ${err}`);
