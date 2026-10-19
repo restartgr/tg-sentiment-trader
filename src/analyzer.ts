@@ -5,6 +5,8 @@ import { config } from "./config";
 import { buildAssetMarketContext, buildMarketContext } from "./market-data";
 import { derivePanicMetrics } from "./panic-metrics";
 import { coerceHeatDriver, HeatDriver } from "./routing";
+import { completedText, outputTokenLimit, OutputTruncatedError } from "./llm-output";
+import { isTransientModelError, runModelRequest } from "./model-request";
 
 interface AssetConfig {
   nickname: string;
@@ -56,24 +58,25 @@ async function chat(
   tier: ModelTier = "deep",
 ): Promise<string> {
   const model = pickModel(tier);
-  const res = await anthropicClient.messages.create({
-    model,
-    max_tokens: maxTokens,
-    system,
-    messages: [{ role: "user", content: user }],
+  const attemptTimeoutMs = tier === "deep" ? 180_000 : 60_000;
+  return runModelRequest({
+    maxAttempts: 2,
+    attemptTimeoutMs,
+    totalTimeoutMs: attemptTimeoutMs * 2 + 5_000,
+    shouldRetry: (error) => error instanceof OutputTruncatedError || isTransientModelError(error),
+    onRetry: (error, nextAttempt) => {
+      console.warn(`模型请求准备第 ${nextAttempt} 次尝试：${error instanceof Error ? error.name : "UnknownError"}`);
+    },
+  }, async ({ previousError, signal, timeoutMs }) => {
+    const outputLimit = outputTokenLimit(maxTokens, previousError);
+    const res = await anthropicClient.messages.create({
+      model,
+      max_tokens: outputLimit,
+      system,
+      messages: [{ role: "user", content: user }],
+    }, { signal, timeout: timeoutMs, maxRetries: 0 });
+    return completedText(res, outputLimit);
   });
-  const text = res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-  // 命中 max_tokens 会把 JSON 从中间截断，后续 JSON.parse 只会报
-  // "Unexpected end of JSON input" 这种看不出原因的错，这里提前点明。
-  if (res.stop_reason === "max_tokens") {
-    console.warn(
-      `⚠️ 模型输出被 max_tokens(${maxTokens}) 截断，请调大上限；已输出 ${res.usage.output_tokens} tokens`,
-    );
-  }
-  return text;
 }
 
 function parseJSON(raw: string): any {
@@ -393,7 +396,7 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
     const raw = await chat(
       system,
       `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n${paceNote ? `${paceNote}\n\n` : ""}以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
-      3500,
+      6000,
     );
     const json = parseJSON(raw);
     const topAssets = Array.isArray(json.topAssets)
