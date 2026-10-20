@@ -82,6 +82,31 @@ pnpm replay --batch 231 --heat-deep-min 0.4
 
 快照保存在 `data/replay/fixtures/batch-<id>.json`，已存在时不会覆盖；回放报告另存于 `data/replay/reports/`。读取业务数据库时使用只读连接，回放本身只读取快照并复用生产路由函数，不调用模型、不访问 Telegram，也不发送告警。默认 score/heat 门槛分别为 0.5/0.6；报告记录本次实际门槛及快照 SHA-256。历史 batch 未保存完整原始门槛，因此新旧决策不同时不能直接判定为代码回归。若新规则要求 Deep，报告只写 `deep_required`，不推测 Deep 分析或最终档位。
 
+### TG 路由评估
+
+`eval/routing-cases.json` 是一组预先写好的固定输入、阈值和预期结果；评估逐项比较 `decision` 与 `triggerReason`，将通过率和差异写入独立报告：
+
+```bash
+pnpm eval:tg
+pnpm eval:tg --cases data/eval/cases.json
+```
+
+默认用例使用可提交的固定数值。自定义用例也可用 `batchId` 代替 `input`，读取 `data/replay/fixtures/batch-<id>.json` 中已有的 W7 快照；这种历史快照仍留在忽略提交的 `data/` 下。报告保存在 `data/eval/reports/`，记录用例文件、路由代码及所用快照的哈希；有失败用例时命令退出码为 1。评估不调用模型、不发送告警、不修改业务数据库或原快照。它只验证路由规则，回答是否有来源、结论是否受证据支持属于后续单独的模型行为评估。
+
+### TG 真实回答评估
+
+在正常 Agent 查询前加 `--capture-answer-eval`，把当次问题、实际 MCP 工具结果、模型回答及用量保存到本地 `data/eval/answer-cases/`。原有 trace 仍只记录元数据。捕获文件可能含群消息正文，已被 `.gitignore` 排除，并以仅当前用户可读的权限新建，不会覆盖旧文件。
+
+```bash
+pnpm agent --capture-answer-eval "请解释 batch 6 的情绪判断，核对来源消息 101 和 102"
+pnpm eval:tg:answer --case data/eval/answer-cases/<run-id>.json
+pnpm eval:tg:answer --case data/eval/answer-cases/<run-id>.json --review data/eval/reviews/<run-id>.json
+```
+
+回答评估从同一次工具结果中核对 `sourceMessageIds` 与对应消息，再检查回答明确列出的来源 ID 是否都在该范围内。报告另存到 `data/eval/reports/`，记录输入哈希、有效/无效 ID 和估算成本；无来源或越界来源会失败。
+
+证据支持需单独写一份人工审核 JSON，包含原始案例的 `caseSha256`、`complete` 和 `claims`。每条 claim 用回答中的原句 `quote`、`verdict`（`supported` / `insufficient` / `unclear`）及 `reason` 记录判断。任何一条 `insufficient` 都使整条回答失败，报告会指出原句与理由；审核尚未完成时不会判为通过。审核文件、原始问答和每次报告分别保存，评估不会修改旧记录。
+
 ## MCP 查询入口
 
 项目提供了一个最小 MCP server，用来把本地 SQLite 里的情绪记忆暴露给 agent 查询：
@@ -122,7 +147,8 @@ Runner 当前具备以下边界和保护：
 
 - 模型可以决定是否调用 tool、调用哪个 tool、传入什么参数、是否继续下一轮以及何时生成最终回答。
 - 最多执行 5 个 LLM steps，超过限制后终止，避免无限 tool loop。
-- 每次 OpenAI 请求最多等待 30 秒，且不做 SDK 自动重试。
+- 每次 OpenAI 请求最多等待 30 秒；遇到连接错误、超时或可重试状态码时最多再试一次，整个模型 step 最多 65 秒。SDK 自动重试已关闭。
+- Anthropic 分析请求也最多尝试两次：light 每次最多 60 秒、总计最多 125 秒；deep 每次最多 180 秒、总计最多 365 秒。若第一次输出命中 `max_tokens`，丢弃截断内容并把第二次输出上限翻倍（deep 为 6000 → 12000）。两次仍失败则明确报错，不保存不完整的分析。
 - 未知 tool、请求超时和其他未处理错误会以非零退出码结束。
 - MCP 的 `isError` 会随 tool result 回传给模型；成功但 `count: 0` 的空结果不会被误判为执行错误。
 - 正常日志只记录 tool 名称、结果块数量和错误状态，不打印 Telegram 原始消息。
