@@ -138,6 +138,16 @@ Runner 当前具备以下边界和保护：
 
 当前 Runner 是本地 CLI，而不是 Telegram 对话 Bot。每次命令都会创建新会话；它尚未支持跨用户消息的持久化 history，也不会写入数据库或向 Telegram 发送消息。
 
+### 本地 Dashboard（W10）
+
+```bash
+pnpm dashboard
+```
+
+在浏览器打开 `http://127.0.0.1:3000`。命令会先构建 React 页面，再启动 Hono 服务。页面显示本地数据库的统计、情绪趋势和最近批次；点击批次可查看分析详情与来源消息。在页面提问会调用同一个 Agent 流程，回答旁显示估算费用、调用次数和本次查阅的批次链接。问答需要在 `.env` 中配置 `OPENAI_API_KEY`。开发页面时可分别运行 `pnpm dashboard:api` 与 `pnpm dashboard:dev`，通过 Vite 的 `http://127.0.0.1:5173` 预览。
+
+服务只监听 `127.0.0.1`，当前页面和接口会展示原始消息，适合本机使用。可用 `DASHBOARD_PORT` 指定端口、`TG_DB_FILE` 指定 SQLite 文件。
+
 ### 资产俗称映射（可选但推荐）
 
 把群里对资产的叫法映射到正式代码，能显著提升识别和行情命中率。复制 `assets.demo.json` 为 `assets.json` 并按需修改（存在 `assets.json` 时优先用它，否则回退到 demo）：
@@ -183,6 +193,7 @@ Runner 当前具备以下边界和保护：
 | `pnpm replay --batch <id>` | 从快照生成独立的规则回放报告 |
 | `pnpm mcp` | 启动只读 MCP 查询 server |
 | `pnpm agent "问题"` | 运行本地 MCP Agent loop |
+| `pnpm dashboard` | 启动本地 Dashboard 和问答接口 |
 | `pnpm summary` | 生成今天 JST 09:00 至当前的群聊综合总结和大盘分析 |
 | `pnpm panic` | 生成鬼叫指数日报 |
 | `pnpm build` | TypeScript 编译到 `dist/` |

@@ -83,7 +83,7 @@ export interface DatabaseStats {
   batchMessageLinks: number;
 }
 
-export function initDatabase(dbFile = DEFAULT_DB_FILE): Database.Database {
+export function initDatabase(dbFile = process.env.TG_DB_FILE ?? DEFAULT_DB_FILE): Database.Database {
   if (database) return database;
 
   fs.mkdirSync(path.dirname(dbFile), { recursive: true });
@@ -416,6 +416,13 @@ export function getBatchById(batchId: number): StoredBatch | null {
     .get(batchId) as StoredBatch | undefined;
 
   return row ?? null;
+}
+
+export function getBatchResultById(batchId: number): unknown | null {
+  const row = getDatabase()
+    .prepare("SELECT result_json AS resultJson FROM batches WHERE id = ?")
+    .get(batchId) as { resultJson: string } | undefined;
+  return row ? JSON.parse(row.resultJson) as unknown : null;
 }
 
 export function getBatchMessageCount(batchId: number): number {

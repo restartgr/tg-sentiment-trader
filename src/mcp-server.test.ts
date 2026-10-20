@@ -168,6 +168,71 @@ test("returns a batch with all of its source messages", () => {
   }
 });
 
+test("tool results label message and batch times in JST", () => {
+  initDatabase(":memory:");
+  try {
+    const messageTime = Date.UTC(2026, 9, 1, 5, 27);
+    const endTime = Date.UTC(2026, 9, 1, 5, 46);
+    const messageId = saveMessage({
+      tgMessageId: 50,
+      groupId: "test-group",
+      senderId: null,
+      username: "test",
+      text: "time fixture",
+      messageTs: messageTime,
+    });
+    const batchId = saveBatch({
+      groupId: "test-group",
+      messageIds: [messageId],
+      startTime: messageTime,
+      endTime,
+      quickScore: 0,
+      finalScore: 0,
+      initialTier: "light",
+      finalTier: "light",
+      dominantEmotion: "neutral",
+      summary: "time fixture",
+      marketInsight: "",
+      result: {},
+      status: "completed",
+    });
+
+    const batchBlock = handleQueryBatches({}).content[0];
+    const searchBlock = handleSearchMessages({}).content[0];
+    const explainBlock = handleExplainBatch({ batchId, messageLimit: 20 }).content[0];
+    assert.equal(batchBlock.type, "text");
+    assert.equal(searchBlock.type, "text");
+    assert.equal(explainBlock.type, "text");
+    if (batchBlock.type !== "text" || searchBlock.type !== "text" || explainBlock.type !== "text") return;
+
+    const batches = JSON.parse(batchBlock.text);
+    const search = JSON.parse(searchBlock.text);
+    const explanation = JSON.parse(explainBlock.text);
+    assert.equal(batches.timeZone, "Asia/Tokyo");
+    assert.equal(batches.batches[0].startTimeJst, "2026-10-01 14:27:00 JST");
+    assert.equal(batches.batches[0].endTimeJst, "2026-10-01 14:46:00 JST");
+    assert.equal(search.messages[0].messageTimeJst, "2026-10-01 14:27:00 JST");
+    assert.equal(explanation.batch.startTimeJst, "2026-10-01 14:27:00 JST");
+    assert.equal(explanation.messages[0].messageTimeJst, "2026-10-01 14:27:00 JST");
+
+    saveMessage({
+      tgMessageId: 51,
+      groupId: "seconds-fixture",
+      senderId: null,
+      username: "test",
+      text: "legacy seconds timestamp",
+      messageTs: messageTime / 1_000,
+    });
+    const secondsBlock = handleSearchMessages({ groupId: "seconds-fixture" }).content[0];
+    assert.equal(secondsBlock.type, "text");
+    if (secondsBlock.type === "text") {
+      assert.equal(JSON.parse(secondsBlock.text).messages[0].messageTimeJst, "2026-10-01 14:27:00 JST");
+    }
+  } finally {
+    closeDatabase();
+  }
+});
+
 test("marks the result as truncated when the message limit is smaller", () => {
   initDatabase(":memory:");
   try {
