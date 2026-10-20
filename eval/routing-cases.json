@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "quick-below-thresholds",
+      "input": { "quickScore": -0.3, "quickHeat": 0.45 },
+      "thresholds": { "scoreMin": 0.5, "heatDeepMin": 0.6 },
+      "expected": { "decision": "quick", "triggerReason": "none" }
+    },
+    {
+      "id": "negative-score-triggers-deep",
+      "input": { "quickScore": -0.3, "quickHeat": 0.45 },
+      "thresholds": { "scoreMin": 0.25, "heatDeepMin": 0.6 },
+      "expected": { "decision": "deep_required", "triggerReason": "score" }
+    },
+    {
+      "id": "heat-triggers-deep",
+      "input": { "quickScore": 0.1, "quickHeat": 0.8 },
+      "thresholds": { "scoreMin": 0.5, "heatDeepMin": 0.6 },
+      "expected": { "decision": "deep_required", "triggerReason": "heat" }
+    },
+    {
+      "id": "score-at-threshold",
+      "input": { "quickScore": 0.5, "quickHeat": 0.2 },
+      "thresholds": { "scoreMin": 0.5, "heatDeepMin": 0.6 },
+      "expected": { "decision": "deep_required", "triggerReason": "score" }
+    },
+    {
+      "id": "both-signals-trigger-deep",
+      "input": { "quickScore": -0.6, "quickHeat": 0.8 },
+      "thresholds": { "scoreMin": 0.5, "heatDeepMin": 0.6 },
+      "expected": { "decision": "deep_required", "triggerReason": "both" }
+    }
+  ]
+}

@@ -14,6 +14,8 @@
     "agent": "tsx src/agent-runner.ts",
     "replay:snapshot": "tsx src/replay-snapshot.ts",
     "replay": "tsx src/replay.ts",
+    "eval:tg": "tsx src/eval-routing.ts",
+    "eval:tg:answer": "tsx src/eval-answer.ts",
     "init-db": "tsx src/db.ts",
     "db:inspect": "tsx src/inspect-db.ts",
     "summary": "tsx src/daily-summary.ts",

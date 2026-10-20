@@ -11,6 +11,7 @@ import {
   estimateModelCostUsd,
   MODEL_PRICING_AS_OF,
 } from "./agent-trace";
+import { saveCapturedAnswer, type CapturedToolCall } from "./eval-answer";
 import { isTransientModelError, ModelRequestTimeoutError, runModelRequest } from "./model-request";
 import { assertInputBudget, boundedToolOutput, toolCallKey } from "./agent-loop-guards";
 
@@ -35,7 +36,8 @@ const transport = new StdioClientTransport({
 });
 
 async function main() {
-  const question = process.argv.slice(2).join(" ").trim();
+  const captureForEval = process.argv[2] === "--capture-answer-eval";
+  const question = process.argv.slice(captureForEval ? 3 : 2).join(" ").trim();
   if (!question) throw new Error("请提供问题");
 
   const controller = new AbortController();
@@ -71,6 +73,12 @@ async function main() {
     );
 
     const runId = crypto.randomUUID();
+    const capturedToolCalls: CapturedToolCall[] = [];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalEstimatedCostUsd = 0;
+    let costKnown = true;
+
     const context: OpenAI.Responses.ResponseInput = [
       {
         role: "user",
@@ -147,6 +155,11 @@ async function main() {
             cacheWriteInputTokens: cacheWriteInputTokens ?? 0,
           })
         : undefined;
+      totalInputTokens += usage?.input_tokens ?? 0;
+      totalOutputTokens += usage?.output_tokens ?? 0;
+      if (estimatedCostUsd === undefined) costKnown = false;
+      else totalEstimatedCostUsd += estimatedCostUsd;
+
       await appendTraceEvent({
         runId,
         step: step + 1,
@@ -205,6 +218,21 @@ async function main() {
           throw new Error("Agent completed without an answer");
         }
         console.log(`llm的结果是：${response.output_text}`);
+        if (captureForEval) {
+          const capturePath = await saveCapturedAnswer({
+            schemaVersion: 1,
+            runId,
+            recordedAt: new Date().toISOString(),
+            question,
+            model: response.model,
+            toolCalls: capturedToolCalls,
+            answer: response.output_text,
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            ...(costKnown ? { estimatedCostUsd: totalEstimatedCostUsd } : {}),
+          });
+          console.log(`Saved answer eval case: ${capturePath}`);
+        }
         return;
       }
 
@@ -260,6 +288,14 @@ async function main() {
         { isError: toolResult.isError === true, content },
       );
       const modelToolOutput = boundedToolOutput(text);
+      if (captureForEval) {
+        capturedToolCalls.push({
+          name: functionCall.name,
+          arguments: toolArguments,
+          isError: toolResult.isError === true,
+          resultText: modelToolOutput,
+        });
+      }
       console.log(
         `原始结果长度：${content.length}，是否报错：${toolResult.isError}`,
       );

@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   DEFAULT_ROUTING_THRESHOLDS,
@@ -10,6 +9,13 @@ import {
   type TriggerReason,
 } from "./routing";
 import type { ReplaySnapshot } from "./replay-snapshot";
+import {
+  isReplayThresholds,
+  loadReplaySnapshotFile,
+  saveJsonReport,
+} from "./rule-replay-support";
+
+export { validateReplaySnapshot } from "./rule-replay-support";
 
 export interface ReplayThresholds {
   scoreMin: number;
@@ -39,41 +45,11 @@ export interface RuleReplayReport {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isUnitNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
-}
-
-export function validateReplaySnapshot(value: unknown): ReplaySnapshot {
-  if (!isRecord(value) || !isRecord(value.input) || !isRecord(value.historicalResult)) {
-    throw new Error("Invalid replay snapshot");
-  }
-  if (
-    value.schemaVersion !== 1 ||
-    !Number.isSafeInteger(value.batchId) ||
-    (value.batchId as number) < 1 ||
-    typeof value.input.quickScore !== "number" ||
-    !Number.isFinite(value.input.quickScore) ||
-    value.input.quickScore < -1 ||
-    value.input.quickScore > 1 ||
-    !isUnitNumber(value.input.quickHeat) ||
-    value.historicalResult.status !== "completed" ||
-    typeof value.historicalResult.tier !== "string" ||
-    value.historicalResult.tier.length === 0
-  ) {
-    throw new Error("Invalid replay snapshot");
-  }
-  return value as unknown as ReplaySnapshot;
-}
-
 export function replayQuickDecision(
-  snapshot: ReplaySnapshot,
+  snapshot: Pick<ReplaySnapshot, "input">,
   thresholds: ReplayThresholds,
 ): RuleReplayResult {
-  if (!isUnitNumber(thresholds.scoreMin) || !isUnitNumber(thresholds.heatDeepMin)) {
+  if (!isReplayThresholds(thresholds)) {
     throw new Error("Replay thresholds must be between 0 and 1");
   }
   const scoreTriggered = isScoreTriggered(snapshot.input.quickScore, thresholds.scoreMin);
@@ -136,14 +112,8 @@ export async function saveRuleReplayReport(
   report: RuleReplayReport,
   reportDir = path.join(process.cwd(), "data", "replay", "reports"),
 ): Promise<string> {
-  await mkdir(reportDir, { recursive: true, mode: 0o700 });
   const reportPath = path.join(reportDir, `batch-${report.batchId}-${report.replayId}.json`);
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-  return reportPath;
+  return saveJsonReport(reportPath, report);
 }
 
 function parseCliArgs(args: string[]): { batchId: number; thresholds: ReplayThresholds } {
@@ -172,17 +142,7 @@ function parseCliArgs(args: string[]): { batchId: number; thresholds: ReplayThre
 
 async function main(): Promise<void> {
   const { batchId, thresholds } = parseCliArgs(process.argv.slice(2));
-  const snapshotPath = path.join(process.cwd(), "data", "replay", "fixtures", `batch-${batchId}.json`);
-  const snapshotText = await readFile(snapshotPath, "utf8");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(snapshotText);
-  } catch {
-    throw new Error("Invalid replay snapshot JSON");
-  }
-  const snapshot = validateReplaySnapshot(parsed);
-  if (snapshot.batchId !== batchId) throw new Error("Snapshot batch ID does not match --batch");
-  const snapshotSha256 = createHash("sha256").update(snapshotText).digest("hex");
+  const { snapshot, snapshotSha256 } = await loadReplaySnapshotFile(batchId);
   const report = makeRuleReplayReport(snapshot, snapshotSha256, thresholds);
   const reportPath = await saveRuleReplayReport(report);
   console.log(`Saved replay report: ${reportPath}`);
