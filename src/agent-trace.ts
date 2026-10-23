@@ -19,9 +19,65 @@ type TraceBase = {
   latencyMs: number;
   status: TraceStatus;
   errorType?: string;
-  errorCode?: number;
+  errorCode?: number | string;
   errorMessage?: string;
+  httpStatus?: number;
+  requestId?: string;
 };
+
+export type ErrorDetails = Pick<
+  TraceBase,
+  "errorType" | "errorCode" | "errorMessage" | "httpStatus" | "requestId"
+>;
+
+// 原始报错可能带回少量请求内容；排查只需要开头那句原因
+const MAX_ERROR_MESSAGE_LENGTH = 200;
+
+function truncateErrorMessage(message: string): string {
+  return message.length > MAX_ERROR_MESSAGE_LENGTH
+    ? `${message.slice(0, MAX_ERROR_MESSAGE_LENGTH)}…`
+    : message;
+}
+
+// 按字段识别 OpenAI APIError、MCP 错误等，不依赖具体 SDK 的类
+export function describeError(
+  error: unknown,
+  signal?: AbortSignal,
+): ErrorDetails {
+  // 取消的原因不一定是 Error：Hono 在客户端断开时传的是字符串
+  if (signal?.aborted) {
+    return {
+      errorType: "Cancelled",
+      errorMessage: "Request cancelled by client",
+    };
+  }
+  if (!(error instanceof Error)) {
+    return {
+      errorType: "UnknownError",
+      errorMessage: truncateErrorMessage(String(error)),
+    };
+  }
+
+  const fields = error as Error & {
+    status?: unknown;
+    code?: unknown;
+    type?: unknown;
+    requestID?: unknown;
+  };
+  const code = fields.code;
+  return {
+    // OpenAI 的 error.name 只是 "Error"，type 才说明错误类别
+    errorType: typeof fields.type === "string" ? fields.type : error.name,
+    ...(typeof code === "string" || typeof code === "number"
+      ? { errorCode: code }
+      : {}),
+    ...(typeof fields.status === "number" ? { httpStatus: fields.status } : {}),
+    ...(typeof fields.requestID === "string"
+      ? { requestId: fields.requestID }
+      : {}),
+    errorMessage: truncateErrorMessage(error.message),
+  };
+}
 
 type ToolContentBlock = { type: string; text?: string };
 

@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 import {
   appendTraceEvent,
   appendToolResultTrace,
+  describeError,
   estimateModelCostUsd,
   MODEL_PRICING_AS_OF,
 } from "./agent-trace";
@@ -55,6 +56,7 @@ export async function runAgent(question: string, options: AgentOptions = {}): Pr
   const inspectedBatchIds = new Set<number>();
   let totalEstimatedCostUsd = 0;
   let costKnown = true;
+  const runId = crypto.randomUUID();
   try {
     await client.connect(transport, { signal, timeout: TOOL_TIMEOUT_MS });
     const { tools } = await client.listTools(undefined, { signal, timeout: TOOL_TIMEOUT_MS });
@@ -77,7 +79,6 @@ export async function runAgent(question: string, options: AgentOptions = {}): Pr
       }),
     );
 
-    const runId = crypto.randomUUID();
     const context: OpenAI.Responses.ResponseInput = [
       {
         role: "developer",
@@ -104,14 +105,15 @@ export async function runAgent(question: string, options: AgentOptions = {}): Pr
           shouldRetry: isTransientModelError,
           signal,
           onRetry: async (error, nextAttempt) => {
+            const details = describeError(error, signal);
             await appendTraceEvent({
               runId,
               step: step + 1,
               finishedAt: new Date().toISOString(),
               latencyMs: Math.round(performance.now() - modelStartedAt),
               status: "error",
-              errorType: error instanceof Error ? error.name : "UnknownError",
-              errorMessage: `Model request retry ${nextAttempt} scheduled`,
+              ...details,
+              errorMessage: `Retry ${nextAttempt} scheduled after: ${details.errorMessage}`,
               eventType: "model_call",
               model: MODEL,
             });
@@ -134,11 +136,10 @@ export async function runAgent(question: string, options: AgentOptions = {}): Pr
         await appendTraceEvent({
           runId,
           step: step + 1,
-          errorMessage: "Model request failed",
           finishedAt: new Date().toISOString(),
           latencyMs: Math.round(performance.now() - modelStartedAt),
           status: "error",
-          errorType: error instanceof Error ? error.name : "UnknownError",
+          ...describeError(error, signal),
           eventType: "model_call",
           model: MODEL,
         });
@@ -257,10 +258,9 @@ export async function runAgent(question: string, options: AgentOptions = {}): Pr
           runId,
           step: step + 1,
           finishedAt: new Date().toISOString(),
-          errorMessage: "Tool call failed",
           latencyMs: Math.round(performance.now() - toolStartedAt),
           status: "error",
-          errorType: error instanceof Error ? error.name : "UnknownError",
+          ...describeError(error, signal),
           eventType: "tool_call",
           toolName: functionCall.name,
         });
@@ -290,6 +290,10 @@ export async function runAgent(question: string, options: AgentOptions = {}): Pr
     }
 
     throw new Error(`Agent 超过最大执行步数: ${MAX_STEPS}`);
+  } catch (error) {
+    // 客户端断开后 Hono 不会再走 onError，取消只能在这里留下记录
+    if (signal.aborted) console.info(`[agent] run ${runId} cancelled by client`);
+    throw error;
   } finally {
     await client.close();
   }
