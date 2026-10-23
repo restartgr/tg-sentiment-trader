@@ -32,31 +32,33 @@ export interface BatchDetail {
   messages: SourceMessage[];
 }
 
+export interface CostSummary {
+  runs: number;
+  knownRuns: number;
+  unknownRuns: number;
+  totalCostUsd: number;
+  averageCostUsd: number | null;
+}
+
+export interface InspectedBatch {
+  id: number;
+  summary: string;
+  url: string;
+}
+
 export interface AgentAnswer {
   runId: string;
   answer: string;
   estimatedCostUsd: number | null;
-  inspectedBatches: Array<{ id: number; summary: string; url: string }>;
+  inspectedBatches: InspectedBatch[];
+}
+
+export interface TraceEvent {
+  eventType: "model_call" | "tool_call";
+  status: "success" | "error";
 }
 
 export interface RunTrace {
   runId: string;
-  events: Array<{ eventType: "model_call" | "tool_call"; status: "success" | "error" }>;
-}
-
-export async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options);
-  let data: unknown;
-  try {
-    data = await response.json();
-  } catch {
-    throw new Error(`接口没有返回 JSON（HTTP ${response.status}）`);
-  }
-  if (!response.ok) {
-    const message = data && typeof data === "object" && "error" in data && typeof data.error === "string"
-      ? data.error
-      : `请求失败（HTTP ${response.status}）`;
-    throw new Error(message);
-  }
-  return data as T;
+  events: TraceEvent[];
 }

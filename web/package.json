@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build"
+    "build": "tsc -p tsconfig.json && vite build",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.104.5",
+    "echarts": "^6.1.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -16,6 +20,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "prettier": "^3.9.10",
     "typescript": "^5.4.2",
     "vite": "^8.3.4"
   }
