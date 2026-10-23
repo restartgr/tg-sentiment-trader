@@ -12,14 +12,40 @@ import {
   initDatabase,
   searchMessages,
   StoredBatch,
+  StoredMessage,
 } from "./db";
+
+const jstFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+function formatJst(timestamp: number): string {
+  const epochMs = timestamp < 1_000_000_000_000 ? timestamp * 1_000 : timestamp;
+  const parts = Object.fromEntries(
+    jstFormatter.formatToParts(new Date(epochMs)).map(({ type, value }) => [type, value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} JST`;
+}
+
+function formatMessage(message: StoredMessage) {
+  return { ...message, messageTimeJst: formatJst(message.messageTs) };
+}
 
 function formatBatch(batch: StoredBatch) {
   return {
     id: batch.id,
     groupId: batch.groupId,
     startTime: batch.startTime,
+    startTimeJst: formatJst(batch.startTime),
     endTime: batch.endTime,
+    endTimeJst: formatJst(batch.endTime),
     quickScore: batch.quickScore,
     finalScore: batch.finalScore,
     initialTier: batch.initialTier,
@@ -75,6 +101,7 @@ export const handleQueryRecentSentiment = (
           {
             count: batches.length,
             batches,
+            timeZone: "Asia/Tokyo",
           },
           null,
           2,
@@ -89,7 +116,7 @@ server.registerTool(
   {
     title: "Query Recent Sentiment",
     description:
-      "Return recent Telegram sentiment analysis batches from the local SQLite memory. This is read-only and does not call any LLM.",
+      "Return recent Telegram sentiment analysis batches from the local SQLite memory. Use startTimeJst and endTimeJst when describing times. This is read-only and does not call any LLM.",
     inputSchema: queryRecentSentimentSchema.shape,
   },
   async (input) => handleQueryRecentSentiment(input),
@@ -159,6 +186,7 @@ export const handleQueryBatches = (
           {
             count: batches.length,
             batches,
+            timeZone: "Asia/Tokyo",
           },
           null,
           2,
@@ -172,7 +200,7 @@ server.registerTool(
   {
     title: "Find Sentiment which meet the query",
     description:
-      "Return Telegram sentiment analysis batches that meet the query from the local SQLite memory. This is read-only and does not call any LLM.",
+      "Return Telegram sentiment analysis batches that meet the query from the local SQLite memory. Use startTimeJst and endTimeJst when describing times. This is read-only and does not call any LLM.",
     inputSchema: queryBatchesSchema.shape,
   },
   async (input) => handleQueryBatches(input),
@@ -233,7 +261,8 @@ export const handleSearchMessages = (
         text: JSON.stringify(
           {
             count: messages.length,
-            messages,
+            messages: messages.map(formatMessage),
+            timeZone: "Asia/Tokyo",
           },
           null,
           2,
@@ -248,7 +277,7 @@ server.registerTool(
   {
     title: "search related messages",
     description:
-      "Search historical Telegram messages in the local SQLite memory by keyword, group, or time range. This tool is read-only and does not call any LLM.",
+      "Search historical Telegram messages in the local SQLite memory by keyword, group, or time range. Use messageTimeJst when describing times. This tool is read-only and does not call any LLM.",
     inputSchema: searchMessagesSchema.shape,
   },
   async (input) => handleSearchMessages(input),
@@ -302,10 +331,11 @@ export const handleExplainBatch = (
           type: "text",
           text: JSON.stringify({
             found: true,
-            batch,
+            batch: formatBatch(batch),
             batchMessagesCount,
             sourceMessageCount,
-            messages,
+            messages: messages.map(formatMessage),
+            timeZone: "Asia/Tokyo",
             truncated: sourceMessageCount < batchMessagesCount,
             sourceMessageIds,
           }),
@@ -320,7 +350,7 @@ server.registerTool(
   {
     title: "Explain Sentiment Batch",
     description:
-      "Return a stored Telegram sentiment analysis batch and a limited set of its associated source messages by batch ID. Use this tool to inspect the evidence behind an existing analysis result. This tool is read-only and does not call an LLM.",
+      "Return a stored Telegram sentiment analysis batch and a limited set of its associated source messages by batch ID. Use the *TimeJst fields when describing times. This tool is read-only and does not call an LLM.",
     inputSchema: explainBatchSchema.shape,
   },
   async ({ batchId, messageLimit }) => {
