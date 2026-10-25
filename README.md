@@ -121,8 +121,11 @@ pnpm agent "找最近已完成批次并解释依据，列出 batchId 和 sourceM
 Runner 当前具备以下边界和保护：
 
 - 模型可以决定是否调用 tool、调用哪个 tool、传入什么参数、是否继续下一轮以及何时生成最终回答。
-- 最多执行 5 个 LLM steps，超过限制后终止，避免无限 tool loop。
-- 每次 OpenAI 请求最多等待 30 秒，且不做 SDK 自动重试。
+- 最多执行 5 个 LLM steps，超过限制后终止，避免无限 tool loop；重复的 tool 调用、最后一步仍要调用 tool、空回答也会停止。
+- 每次 OpenAI 请求最多等待 30 秒；连接错误、超时、429 和 5xx 最多重试一次，不使用 SDK 自动重试。
+- 每次 MCP tool 调用最多等待 15 秒。
+- 每次模型请求前检查输入预算（96 KB）；单个 tool 结果超过 24 KB 时返回明确错误和缩小查询的提示，不提供截断后的部分来源。
+- 取消会传播到模型请求和 MCP 调用：CLI 响应 `SIGINT` / `SIGTERM`，Dashboard 在浏览器取消或断开时中止。
 - 未知 tool、请求超时和其他未处理错误会以非零退出码结束。
 - MCP 的 `isError` 会随 tool result 回传给模型；成功但 `count: 0` 的空结果不会被误判为执行错误。
 - 正常日志只记录 tool 名称、结果块数量和错误状态，不打印 Telegram 原始消息。
@@ -138,15 +141,44 @@ Runner 当前具备以下边界和保护：
 
 当前 Runner 是本地 CLI，而不是 Telegram 对话 Bot。每次命令都会创建新会话；它尚未支持跨用户消息的持久化 history，也不会写入数据库或向 Telegram 发送消息。
 
-### 本地 Dashboard（W10）
+### 运行记录与成本（trace）
+
+每次 Agent 问答（CLI 和 Dashboard 共用）都会写入 `data/traces/<runId>.jsonl`，每行一个事件：
+
+- `model_call`：模型、耗时、token 用量和估算费用（`estimatedCostUsd`，模型不在价格表中时缺省）。
+- `tool_call`：tool 名称、耗时和状态。
+
+失败事件记录 `errorType`、`errorCode`、`httpStatus`、`requestId`（可用于在 OpenAI 后台定位请求）和截断到 200 字的 `errorMessage`；不记录 token 或 API key。用户取消记为 `errorType: "Cancelled"`，服务端同时输出 `[agent] run <runId> cancelled by client`。
+
+### 本地 Dashboard
 
 ```bash
 pnpm dashboard
 ```
 
-在浏览器打开 `http://127.0.0.1:3000`。命令会先构建 React 页面，再启动 Hono 服务。页面显示本地数据库的统计、情绪趋势和最近批次；点击批次可查看分析详情与来源消息。在页面提问会调用同一个 Agent 流程，回答旁显示估算费用、调用次数和本次查阅的批次链接。问答需要在 `.env` 中配置 `OPENAI_API_KEY`。开发页面时可分别运行 `pnpm dashboard:api` 与 `pnpm dashboard:dev`，通过 Vite 的 `http://127.0.0.1:5173` 预览。
+在浏览器打开 `http://127.0.0.1:3000`。命令会先构建 React 页面，再启动 Hono 服务。问答需要在 `.env` 中配置 `OPENAI_API_KEY`；其余页面只读取本地数据库，不调用模型。
 
-服务只监听 `127.0.0.1`，当前页面和接口会展示原始消息，适合本机使用。可用 `DASHBOARD_PORT` 指定端口、`TG_DB_FILE` 指定 SQLite 文件。
+页面功能：
+
+- **统计与趋势**：消息和批次统计；最近 24 个批次的方向分数（左轴 −1 至 +1）与 Heat（右轴 0 至 1）折线图，点击数据点打开对应批次。
+- **批次详情**：分析摘要、市场洞察、讨论主题和来源消息；打开的批次同步到 URL（`?batch=<id>`）。
+- **Agent 问答**：回答旁显示本次估算费用、模型与工具调用次数，以及 Agent 实际查阅过的批次链接；进行中可取消；问题超过 2000 字时提示错误并禁止发送。
+- **问答成本汇总**：最近 20 次问答的总费用与平均费用；价格未知的运行单独提示，不计入总额。
+
+接口：
+
+| 接口 | 作用 |
+|---|---|
+| `GET /api/stats` | 数据库统计 |
+| `GET /api/batches?limit=` | 最近批次（1–100，默认 50） |
+| `GET /api/batches/:id` | 批次详情与来源消息 |
+| `POST /api/ask` | 运行 Agent 问答；客户端断开时取消 |
+| `GET /api/runs/:runId` | 单次问答的 trace |
+| `GET /api/costs?limit=` | 最近问答的成本汇总（1–100，默认 50） |
+
+前端位于 `web/`（React + TanStack Query + ECharts），按 `api/`、`hooks/`、`lib/`、`components/` 组织。开发时分别运行 `pnpm dashboard:api` 与 `pnpm dashboard:dev`，通过 Vite 的 `http://127.0.0.1:5173` 预览；`pnpm --dir web format` 使用 Prettier 格式化前端代码。
+
+服务只监听 `127.0.0.1`，页面和接口会展示原始消息，适合本机使用。可用 `DASHBOARD_PORT` 指定端口、`TG_DB_FILE` 指定 SQLite 文件。
 
 ### 资产俗称映射（可选但推荐）
 
@@ -177,6 +209,8 @@ pnpm dashboard
 | `ASSET_DETAIL_MIN_ABS_SCORE` | 单票分析下限（默认 0.65）：`>=` 才逐个跑 Top 资产单票分析 |
 | `ASSET_DETAIL_COUNT` | 单票分析数量（默认 3） |
 | `REPORT_BENCHMARKS` | `pnpm summary` 固定分析的大盘 Yahoo Finance symbol，逗号分隔（默认 `^N225`） |
+| `DASHBOARD_PORT` | Dashboard 端口（默认 3000） |
+| `TG_DB_FILE` | SQLite 文件路径（默认 `data/tg-sentiment.db`） |
 
 完整示例见 [.env.example](.env.example)。
 
@@ -193,10 +227,12 @@ pnpm dashboard
 | `pnpm replay --batch <id>` | 从快照生成独立的规则回放报告 |
 | `pnpm mcp` | 启动只读 MCP 查询 server |
 | `pnpm agent "问题"` | 运行本地 MCP Agent loop |
-| `pnpm dashboard` | 启动本地 Dashboard 和问答接口 |
+| `pnpm dashboard` | 构建前端并启动本地 Dashboard 和问答接口 |
+| `pnpm dashboard:api` / `pnpm dashboard:dev` | 分别启动 Dashboard 接口和前端开发服务器 |
 | `pnpm summary` | 生成今天 JST 09:00 至当前的群聊综合总结和大盘分析 |
 | `pnpm panic` | 生成鬼叫指数日报 |
 | `pnpm build` | TypeScript 编译到 `dist/` |
+| `pnpm test` | 自动发现并运行 `src/*.test.ts` 全部测试 |
 
 ## 设计原则
 
