@@ -28,12 +28,16 @@ function BatchRow({
   const summary = batch.summary || "暂无摘要";
 
   return (
-    <tr>
+    // 整行可点；编号按钮保留给键盘和读屏用户，点击时阻止冒泡避免重复打开。
+    <tr className="batch-row" onClick={() => onOpenBatch(batch.id)}>
       <td>
         <button
           className="batch-button"
           type="button"
-          onClick={() => onOpenBatch(batch.id)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenBatch(batch.id);
+          }}
         >
           #{batch.id}
         </button>
@@ -110,7 +114,7 @@ export function BatchTable({ batches, loading, onOpenBatch }: BatchTableProps) {
           </tbody>
         </table>
       </div>
-      <div className="table-foot">点击批次查看摘要、主题与来源消息</div>
+      <div className="table-foot">点击任意一行查看摘要、主题与来源消息</div>
     </section>
   );
 }

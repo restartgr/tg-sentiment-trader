@@ -115,6 +115,8 @@ th:last-child, td:last-child { width: 12%; padding-right: 24px; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr { transition: background .15s; }
 tbody tr:hover td { background: var(--surface-raised); }
+tbody tr.batch-row { cursor: pointer; }
+tbody tr.batch-row:hover .batch-button { color: var(--accent); }
 .batch-button { display: block; padding: 0; border: 0; background: transparent; color: var(--text); font-size: 14px; font-weight: 700; text-align: left; }
 .batch-button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .cell-sub { display: block; margin-top: 4px; color: var(--text-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
