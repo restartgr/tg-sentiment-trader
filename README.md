@@ -58,6 +58,16 @@ pnpm start          # 或 pnpm dev（带热重载）
 
 消息到达后会先写入 `messages`，再进入内存 batch。原始消息通过 Telegram ID 幂等写入，不会因为重启而重复；每次启动会为当天全部消息新增一次 `preheat` 总结快照，启动后的实时消息才按 batch size 分析。`data/` 默认不会提交到 Git。
 
+### 定期清理旧数据
+
+```bash
+pnpm prune --dry-run          # 预演：只统计会清理多少
+pnpm prune                    # 保留最近 6 个月，更早的批次和消息先归档再删除
+pnpm prune --months 3         # 自定义保留月数
+```
+
+清理前会把要删除的数据导出到 `data/archive/prune-*.jsonl.gz`（gzip 压缩的 JSON Lines），归档文件默认保留 12 个月（`--archive-months` 可调）。跨越截止线的批次会整批保留，连同它引用的来源消息，避免详情里丢消息。
+
 不需要手写 SQL 就能检查数据库：
 
 ```bash

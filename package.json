@@ -24,7 +24,8 @@
     "panic": "tsx src/panic-report.ts",
     "bomb": "tsx src/bomb-report.ts",
     "user-report": "tsx src/user-report.ts",
-    "leaderboard": "tsx src/leaderboard-report.ts"
+    "leaderboard": "tsx src/leaderboard-report.ts",
+    "prune": "tsx src/prune.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
