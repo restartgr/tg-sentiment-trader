@@ -45,6 +45,10 @@ export const config = {
     // 你自己的 Telegram user ID（用于接收提醒）
     myUserId: parseIntEnv("TG_MY_USER_ID"),
     bombTarget: process.env.TG_BOMB_TARGET ?? "",
+    // 发言追踪：要单独追踪的群成员数字 user ID（逗号分隔），用于 pnpm user-report
+    watchUserIds: parseList(process.env.TG_WATCH_USER_IDS ?? ""),
+    // 监听进程内触发发言追踪的 cron（JST），例如 "0 12 * * 1-5"；留空不启用
+    userReportCron: process.env.USER_REPORT_CRON ?? "",
     // 是否把自己的发言从情绪分析里剔除（默认剔除，设 TG_EXCLUDE_SELF=false 关闭）
     excludeSelf: (process.env.TG_EXCLUDE_SELF ?? "true").toLowerCase() !== "false",
   },

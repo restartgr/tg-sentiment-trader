@@ -23,6 +23,7 @@
     "summary": "tsx src/daily-summary.ts",
     "panic": "tsx src/panic-report.ts",
     "bomb": "tsx src/bomb-report.ts",
+    "user-report": "tsx src/user-report.ts",
     "leaderboard": "tsx src/leaderboard-report.ts"
   },
   "dependencies": {

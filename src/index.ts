@@ -1,5 +1,6 @@
 import { Api, TelegramClient } from "telegram";
 import { NewMessage, NewMessageEvent } from "telegram/events";
+import cron from "node-cron";
 import { config } from "./config";
 import {
   hasCompletedAnalysis,
@@ -26,6 +27,7 @@ import {
   resolveGroup,
   sendToSavedMessages,
 } from "./telegram-utils";
+import { runUserReport } from "./user-report";
 import {
   decideDeepOutcome,
   heatDriverEmoji,
@@ -584,6 +586,30 @@ async function main() {
   }
 
   console.log("✅ 开始监听实时消息\n");
+
+  // 发言追踪：在监听进程内定时触发，复用同一个 client，避免同一 session 双开。
+  if (config.telegram.userReportCron && config.telegram.watchUserIds.length > 0) {
+    if (!cron.validate(config.telegram.userReportCron)) {
+      throw new Error(`USER_REPORT_CRON 格式无效：${config.telegram.userReportCron}`);
+    }
+    let userReportRunning = false;
+    cron.schedule(
+      config.telegram.userReportCron,
+      async () => {
+        if (userReportRunning) return;
+        userReportRunning = true;
+        try {
+          await runUserReport(client, { since: "00:00" });
+        } catch (error) {
+          console.error("定时发言追踪失败:", error);
+        } finally {
+          userReportRunning = false;
+        }
+      },
+      { timezone: "Asia/Tokyo" },
+    );
+    console.log(`⏰ 发言追踪已排程：${config.telegram.userReportCron} (JST)`);
+  }
 
   client.addEventHandler(
     async (event: NewMessageEvent) => {

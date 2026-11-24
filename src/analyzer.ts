@@ -893,3 +893,112 @@ export function checkExtreme(
   }
   return { isExtreme: false, avgScore: avg, direction: null };
 }
+
+// ── 单个用户发言追踪：提取他提到的股票与观点，再结合行情做逐票分析 ──
+
+export type UserStance = "看多" | "看空" | "观望" | "中性";
+
+export interface UserStockMention extends AssetInfo {
+  stance: UserStance;
+  hisView: string; // 他对该股票说了什么（客观转述）
+  quotes: string[]; // 相关原话，≤3 条
+  analysis: string; // 结合行情的分析；未做行情分析时为空
+}
+
+export interface UserStockReport {
+  mood: string;
+  summary: string;
+  otherTopics: string[];
+  stocks: UserStockMention[];
+}
+
+const USER_STANCES: UserStance[] = ["看多", "看空", "观望", "中性"];
+const USER_REPORT_MAX_STOCKS = 6;
+const USER_REPORT_MARKET_STOCKS = 3;
+
+export async function analyzeUserStocks(
+  messages: { time: string; text: string }[],
+  displayName: string,
+): Promise<UserStockReport> {
+  const formatted = messages.map((m) => `[${m.time}] ${m.text}`).join("\n");
+  const assetHints = loadAssetHints();
+  const extractSystem = `你是股票讨论整理助手。下面是群成员「${displayName}」在一段时间内的全部发言，请整理他提到的股票/指数/ETF/商品及其观点。
+
+【要求】
+- 只客观转述他说了什么、对标的是什么态度，不评价这个人的能力、智商、性格或可信度。
+- stance 只能是：看多、看空、观望、中性。没有明确倾向就写中性。
+- 尽量给出 ticker 和 exchange：日股写 4 位代码 + 东京；美股写代码 + NASDAQ/NYSE；指数可写 ^N225 等 Yahoo 代码 + 指数。不确定就写 "未知"，禁止编造。
+- 只收录他自己表达过观点或明确提及的标的；纯转发新闻里顺带出现的标的，若他未表态，stance 写中性。
+- stocks 按他讨论的重要程度排序，最多 ${USER_REPORT_MAX_STOCKS} 个。
+- quotes 选与该标的相关的原话，≤3 条、每条 ≤40 字，原话中的英文双引号改为单引号。
+- otherTopics：与股票无关的主要话题，≤5 个短语。
+${assetHints ? `- 群内常用叫法参考：${assetHints}` : ""}
+
+只返回JSON，不要其他文字：
+{"mood":"一句话描述他这段时间的情绪状态","summary":"2-3句概括他的主要观点","otherTopics":["..."],"stocks":[{"nickname":"他的叫法","name":"正式名称","ticker":"代码或未知","exchange":"交易所或未知","stance":"看多|看空|观望|中性","hisView":"他对该标的的观点转述","quotes":["原话"]}]}`;
+
+  const raw = await chat(
+    extractSystem,
+    `以下是「${displayName}」的发言（JST 时间）：\n\n${formatted}`,
+    4000,
+    "light",
+  );
+  const json = parseJSON(raw);
+  const stocks: UserStockMention[] = (Array.isArray(json.stocks) ? json.stocks : [])
+    .slice(0, USER_REPORT_MAX_STOCKS)
+    .map((s: any) => ({
+      nickname: String(s.nickname ?? s.name ?? ""),
+      name: String(s.name ?? s.nickname ?? ""),
+      ticker: String(s.ticker ?? "未知"),
+      exchange: String(s.exchange ?? "未知"),
+      stance: USER_STANCES.includes(s.stance) ? s.stance : "中性",
+      hisView: String(s.hisView ?? ""),
+      quotes: Array.isArray(s.quotes) ? s.quotes.map(String).slice(0, 3) : [],
+      analysis: "",
+    }));
+
+  const report: UserStockReport = {
+    mood: String(json.mood ?? ""),
+    summary: String(json.summary ?? ""),
+    otherTopics: Array.isArray(json.otherTopics) ? json.otherTopics.map(String).slice(0, 5) : [],
+    stocks,
+  };
+
+  const withTicker = stocks.filter((s) => s.ticker && s.ticker !== "未知").slice(0, USER_REPORT_MARKET_STOCKS);
+  if (withTicker.length === 0) return report;
+
+  const contexts = await Promise.all(withTicker.map((s) => safeBuildAssetMarketContext(s)));
+  const analysisSystem = `你是交易辅助分析器。针对群成员「${displayName}」提到的每个标的，把他的观点和实际行情对照，给出简短分析。
+
+【要求】
+- 不评价这个人，只分析标的：他的观点与当前价、涨跌幅、斐波那契、ORB、新闻是否一致，有哪些值得关注的点位或风险。
+- 点位必须来自行情上下文；上下文显示行情获取失败或数据不足时，明确说数据不足，禁止编造价位。
+- 每个标的 2-3 句，结尾给出【偏多/偏空/观望】的客观判断。这不是投资建议。
+- ticker 必须与输入一致。
+
+只返回JSON，不要其他文字。字符串值内禁止使用英文双引号：
+{"analyses":[{"ticker":"...","analysis":"..."}]}`;
+
+  try {
+    const analysisRaw = await chat(
+      analysisSystem,
+      withTicker
+        .map((s, i) => [
+          `标的 ${i + 1}：${s.nickname}/${s.name}/${s.ticker}/${s.exchange}`,
+          `他的态度：${s.stance}；观点：${s.hisView}`,
+          `行情上下文：${contexts[i]}`,
+        ].join("\n"))
+        .join("\n\n"),
+      2500,
+    );
+    const analyses: any[] = parseJSON(analysisRaw).analyses ?? [];
+    for (const item of analyses) {
+      const target = withTicker.find((s) => s.ticker === String(item.ticker));
+      if (target) target.analysis = String(item.analysis ?? "");
+    }
+  } catch (e) {
+    console.error("用户发言行情分析失败，已降级为仅观点整理：", e);
+  }
+
+  return report;
+}
