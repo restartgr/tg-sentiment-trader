@@ -138,6 +138,22 @@ export function initDatabase(dbFile = process.env.TG_DB_FILE ?? DEFAULT_DB_FILE)
       FOREIGN KEY(batch_id) REFERENCES batches(id) ON DELETE CASCADE,
       FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
     );
+
+    -- 黑话词典自动学习：大模型认出的新叫法先记为 pending，经 bot 确认后才进词典。
+    CREATE TABLE IF NOT EXISTS asset_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      term TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      exchange TEXT NOT NULL,
+      yahoo_symbol TEXT NOT NULL DEFAULT '',
+      yahoo_name TEXT NOT NULL DEFAULT '',
+      evidence TEXT NOT NULL DEFAULT '',
+      group_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL CHECK(status IN ('pending', 'confirmed', 'rejected')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      decided_at TEXT
+    );
   `);
 
   return database;
@@ -456,6 +472,79 @@ export function getBatchMessages(
     `,
     )
     .all(batchId, normalizeLimit(limit, 20)) as StoredMessage[];
+}
+
+export type AliasStatus = "pending" | "confirmed" | "rejected";
+
+export interface AliasCandidateInput {
+  term: string;
+  name: string;
+  ticker: string;
+  exchange: string;
+  yahooSymbol: string;
+  yahooName: string;
+  evidence: string;
+  groupId: string;
+}
+
+export interface StoredAlias extends AliasCandidateInput {
+  id: number;
+  status: AliasStatus;
+}
+
+// 已存在同名 term（任何状态）返回 null，避免重复提醒或推翻已做的决定。
+export function insertAliasCandidate(input: AliasCandidateInput): number | null {
+  const result = getDatabase()
+    .prepare(
+      `INSERT OR IGNORE INTO asset_aliases
+        (term, name, ticker, exchange, yahoo_symbol, yahoo_name, evidence, group_id, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+    )
+    .run(
+      input.term,
+      input.name,
+      input.ticker,
+      input.exchange,
+      input.yahooSymbol,
+      input.yahooName,
+      input.evidence,
+      input.groupId,
+    );
+  return result.changes > 0 ? Number(result.lastInsertRowid) : null;
+}
+
+function rowToAlias(row: any): StoredAlias {
+  return {
+    id: row.id,
+    term: row.term,
+    name: row.name,
+    ticker: row.ticker,
+    exchange: row.exchange,
+    yahooSymbol: row.yahoo_symbol,
+    yahooName: row.yahoo_name,
+    evidence: row.evidence,
+    groupId: row.group_id,
+    status: row.status,
+  };
+}
+
+export function listAliases(status?: AliasStatus): StoredAlias[] {
+  const db = getDatabase();
+  const rows = status
+    ? db.prepare("SELECT * FROM asset_aliases WHERE status = ? ORDER BY id").all(status)
+    : db.prepare("SELECT * FROM asset_aliases ORDER BY id").all();
+  return rows.map(rowToAlias);
+}
+
+// 只允许 pending → confirmed/rejected，重复点按钮不会改写已做的决定。
+export function decideAlias(id: number, status: "confirmed" | "rejected"): StoredAlias | null {
+  const db = getDatabase();
+  db.prepare(
+    `UPDATE asset_aliases SET status = ?, decided_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND status = 'pending'`,
+  ).run(status, id);
+  const row = db.prepare("SELECT * FROM asset_aliases WHERE id = ?").get(id);
+  return row ? rowToAlias(row) : null;
 }
 
 export function closeDatabase(): void {

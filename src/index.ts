@@ -29,7 +29,8 @@ import {
 } from "./telegram-utils";
 import { runUserReport } from "./user-report";
 import { decideAlert, LastAlert } from "./alert-gate";
-import { BotTarget, sendAlert } from "./bot-notify";
+import { BotTarget, sendAlert, startCallbackPoller } from "./bot-notify";
+import { handleAliasCallback, learnAliasesFromBatch } from "./alias-learning";
 import {
   decideDeepOutcome,
   heatDriverEmoji,
@@ -291,6 +292,18 @@ async function main() {
     ? { token: config.telegram.botToken, chatId: config.telegram.myUserId.toString() }
     : null;
   const lastAlerts = new Map<string, LastAlert>();
+  const groupLabels = new Map<string, string>(
+    targetGroupEntities.map((e: any) => [
+      normalizeTelegramId(e.id.toString()),
+      e.title ?? e.username ?? normalizeTelegramId(e.id.toString()),
+    ]),
+  );
+  if (alertBot) {
+    // 接收黑话确认按钮；只认你自己的点击。
+    startCallbackPoller(alertBot, config.telegram.myUserId.toString(), async (q) => {
+      return (await handleAliasCallback(q)) ?? "未知操作";
+    });
+  }
   const alertThresholds = {
     minAbsScore: config.sentiment.alertMinAbsScore,
     minHeat: config.sentiment.alertMinHeat,
@@ -309,6 +322,14 @@ async function main() {
     let persistedBatchId: number | null = null;
 
     const paceNote = describePace(buffer);
+
+    // 黑话学习与情绪分析并行、互不影响：失败只记日志。
+    void learnAliasesFromBatch({
+      groupId,
+      groupLabel: groupLabels.get(groupId) ?? groupId,
+      messages: buffer,
+      bot: alertBot,
+    }).catch((err) => console.error("黑话学习失败:", err));
 
     try {
       const quick = await analyzeBatchScore(buffer, paceNote);
