@@ -97,6 +97,14 @@ export const config = {
     // 同一个群的告警冷却（分钟）；冷却期内强度比上次高出 ALERT_ESCALATION_DELTA 才再推。
     alertCooldownMinutes: parseFloatEnv("ALERT_COOLDOWN_MINUTES", 30),
     alertEscalationDelta: parseFloatEnv("ALERT_ESCALATION_DELTA", 0.05),
+    // 提及量异动：近 N 分钟被提次数 >= MIN_COUNT 且 >= 平时同长度窗口的 RATIO 倍才推送
+    mentionWindowMinutes: parseFloatEnv("MENTION_WINDOW_MINUTES", 30),
+    mentionLookbackDays: parseFloatEnv("MENTION_LOOKBACK_DAYS", 7),
+    mentionSpikeMinCount: parseFloatEnv("MENTION_SPIKE_MIN_COUNT", 8),
+    mentionSpikeRatio: parseFloatEnv("MENTION_SPIKE_RATIO", 4),
+    mentionCooldownMinutes: parseFloatEnv("MENTION_COOLDOWN_MINUTES", 120),
+    // 只盯这些 Yahoo symbol（逗号分隔，如 8035.T,6857.T,NVDA）；留空 = 全部
+    mentionWatchlist: parseList(process.env.MENTION_WATCHLIST ?? ""),
     // 单票详细分析：>= 此值才逐个跑 Top 资产单票分析
     assetDetailMinAbsScore: parseFloatEnv("ASSET_DETAIL_MIN_ABS_SCORE", 0.65),
     // 单票详细分析数量

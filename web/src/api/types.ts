@@ -62,3 +62,31 @@ export interface RunTrace {
   runId: string;
   events: TraceEvent[];
 }
+
+export interface OutcomeStat {
+  kind: "sentiment" | "mention";
+  direction: number;
+  alerts: number;
+  evaluated: number;
+  avgRet1d: number | null;
+  avgRet5d: number | null;
+  reversalRate: number | null;
+}
+
+export interface OutcomeRow {
+  id: number;
+  alertTs: number;
+  kind: "sentiment" | "mention";
+  direction: number;
+  score: number | null;
+  label: string;
+  symbol: string;
+  basePrice: number;
+  ret1d: number | null;
+  ret5d: number | null;
+}
+
+export interface OutcomeSummary {
+  stats: OutcomeStat[];
+  recent: OutcomeRow[];
+}

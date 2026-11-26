@@ -5,6 +5,7 @@ import {
   fetchBatchDetail,
   fetchBatches,
   fetchCostSummary,
+  fetchOutcomes,
   fetchRunTrace,
   fetchStats,
 } from "../api/dashboard";
@@ -18,6 +19,7 @@ export const queryKeys = {
   batch: (id: number) => ["batch", id] as const,
   costs: (limit: number) => ["costs", limit] as const,
   run: (runId: string) => ["run", runId] as const,
+  outcomes: ["outcomes"] as const,
 };
 
 // queryFn 拿到的 signal 会在组件卸载或查询被取代时自动 abort
@@ -79,4 +81,11 @@ export function useAskAgent() {
   useEffect(() => () => controllerRef.current?.abort(), []);
 
   return { ...mutation, cancel };
+}
+
+export function useOutcomes() {
+  return useQuery({
+    queryKey: queryKeys.outcomes,
+    queryFn: ({ signal }) => fetchOutcomes(signal),
+  });
 }

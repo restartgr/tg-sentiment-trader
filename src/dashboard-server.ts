@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import dotenv from "dotenv";
 import { getBatchById, getDatabaseStats, initDatabase } from "./db";
-import { getDashboardBatch, listDashboardBatches } from "./dashboard-data";
+import { getDashboardBatch, getOutcomeSummary, listDashboardBatches } from "./dashboard-data";
 import { runAgent } from "./agent-service";
 import type { TraceEvent } from "./agent-trace";
 
@@ -96,6 +96,7 @@ export function createDashboardServer() {
   });
 
   app.get("/api/stats", (c) => c.json(getDatabaseStats()));
+  app.get("/api/outcomes", (c) => c.json(getOutcomeSummary()));
   app.get("/api/batches", (c) => {
     const numberLimit = Number(c.req.query("limit") ?? 50);
     if (

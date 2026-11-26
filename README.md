@@ -27,6 +27,23 @@
 
 每批消息额外跑一次轻量资产识别：群里出现词典（`assets.json`）里没有的**俗称**（外号、谐音、错别字变体；正式名、代码、指数不算），先用 Yahoo 验证代码真实存在，再由 Bot 静音推一条「🆕 新黑话待确认」，带 ✅/❌ 按钮。点 ✅ 写入数据库 `asset_aliases`，下一批分析立刻生效；点 ❌ 以后不再问。`assets.json` 不会被改写，手工条目和学到的条目在读取时合并。需要配置 `TELEGRAM_BOT_TOKEN` 才能一键确认，否则候选只落库。
 
+### 行情交叉验证
+
+每条情绪告警末尾附两类对照，用来区分"群里瞎激动"和"市场真在动"：
+
+- **📐 价格背离**：群内恐慌但日经（`REPORT_BENCHMARKS` 第一个）跌不到 1% → 情绪可能过度反应；群内亢奋但涨不到 0.5% → 追高力量可能衰竭。
+- **🌡️ 外部指标**：VIX（Yahoo）和日经 VI（日经官方每日 CSV，前一交易日收盘）。VIX≥25 或日经 VI≥30 视为外部恐慌，VIX≤15 且日经 VI≤20 视为外部平静；群内与外部同向时标「✅ 双重确认」。
+
+阈值集中在 `src/market-signals.ts`。
+
+### 提及量异动
+
+每批识别出的资产提及按 Yahoo symbol 归一落库（`asset_mentions`）。近 `MENTION_WINDOW_MINUTES`(30) 分钟被提 ≥ `MENTION_SPIKE_MIN_COUNT`(8) 次，且是过去 `MENTION_LOOKBACK_DAYS`(7) 天里"有人说话的同长度时段"平均值的 `MENTION_SPIKE_RATIO`(4) 倍以上，就推送「🗣️ 提及异动」。同一只票冷却 `MENTION_COOLDOWN_MINUTES`(120) 分钟，期间提及数翻倍才再推。`MENTION_WATCHLIST` 可只盯指定 symbol（如 `8035.T,6857.T,NVDA`）。提及记录不足 1 天时只记录不推送（基线预热）。
+
+### 告警事后验证
+
+每次推送告警都会记下当时的日经和相关个股价格（`alert_outcomes`），之后回填告警后第 1、第 5 个交易日收盘的涨跌：监听进程工作日 16:30 跑一次，19:05 日报顺带跑一次，也可手动 `pnpm outcomes`（同时打印汇总）。Dashboard「告警事后验证」面板按恐慌/亢奋/提及异动分类，显示平均涨跌和 5 日反转率，用来校准上面的门槛。
+
 行情上下文走 Yahoo Finance（实时报价 / 斐波那契回撤 / ORB 开盘区间 / 新闻），全程带缓存和失败降级；取不到数据时会明确约束模型**不许编造价位**。
 
 ## 独立日报脚本
@@ -252,6 +269,7 @@ pnpm dashboard
 | `pnpm dashboard:api` / `pnpm dashboard:dev` | 分别启动 Dashboard 接口和前端开发服务器 |
 | `pnpm summary` | 生成今天 JST 09:00 至当前的群聊综合总结和大盘分析 |
 | `pnpm panic` | 生成鬼叫指数日报 |
+| `pnpm outcomes` | 回填告警事后验证并打印汇总 |
 | `pnpm build` | TypeScript 编译到 `dist/` |
 | `pnpm test` | 自动发现并运行 `src/*.test.ts` 全部测试 |
 
