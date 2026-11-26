@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config";
-import { loadDictionary, MentionedAsset, MentionKind } from "./asset-dictionary";
+import { loadDictionary, MentionedAsset, MentionKind, MentionStance } from "./asset-dictionary";
 import { buildAssetMarketContext, buildMarketContext } from "./market-data";
 import { derivePanicMetrics } from "./panic-metrics";
 import { coerceHeatDriver, HeatDriver } from "./routing";
@@ -19,15 +19,27 @@ function loadAssetHints(): string {
 // apiKey 在 config 层已用 requireEnv 强制必填，这里可无条件构造。
 const anthropicClient = new Anthropic({ apiKey: config.llm.apiKey });
 
-// light：高频的轻量评分/筛选，用便宜模型。deep：重要的深度分析，用旗舰模型。
-type ModelTier = "light" | "deep";
+// light：每批都跑的轻量评分/提及识别。deep：日报、鬼叫、发言追踪等定时分析。
+// alert：实时告警的深度分析与单票分析——次数少、最需要判断力，用最强的模型。
+type ModelTier = "light" | "deep" | "alert";
 
 function pickModel(tier: ModelTier): string {
-  return tier === "light" ? config.llm.modelLight : config.llm.modelDeep;
+  if (tier === "light") return config.llm.modelLight;
+  if (tier === "alert") return config.llm.modelAlert;
+  return config.llm.modelDeep;
 }
 
+// 这些模型可能以 stop_reason=refusal 拒答；开启服务端 fallback，拒答时由 API 自动换模型重跑。
+const SERVER_FALLBACK_MODELS = new Set([
+  "claude-opus-5-5",
+  "claude-opus-5",
+  "claude-sonnet-5-5",
+  "claude-fable-5-1",
+  "claude-fable-5-2",
+]);
+
 console.log(
-  `🤖 使用模型：light=${config.llm.modelLight} / deep=${config.llm.modelDeep}`,
+  `🤖 使用模型：light=${config.llm.modelLight} / deep=${config.llm.modelDeep} / alert=${config.llm.modelAlert}`,
 );
 
 async function chat(
@@ -35,9 +47,10 @@ async function chat(
   user: string,
   maxTokens: number,
   tier: ModelTier = "deep",
+  options: { noThinking?: boolean } = {},
 ): Promise<string> {
   const model = pickModel(tier);
-  const attemptTimeoutMs = tier === "deep" ? 180_000 : 60_000;
+  const attemptTimeoutMs = tier === "light" ? 60_000 : 180_000;
   return runModelRequest({
     maxAttempts: 2,
     attemptTimeoutMs,
@@ -48,12 +61,28 @@ async function chat(
     },
   }, async ({ previousError, signal, timeoutMs }) => {
     const outputLimit = outputTokenLimit(maxTokens, previousError);
-    const res = await anthropicClient.messages.create({
+    const params = {
       model,
       max_tokens: outputLimit,
+      // 机械性的抽取任务不需要思考：思考 token 按输出价计费，关掉能省大半成本。
+      ...(options.noThinking ? { thinking: { type: "disabled" as const } } : {}),
       system,
-      messages: [{ role: "user", content: user }],
-    }, { signal, timeout: timeoutMs, maxRetries: 0 });
+      messages: [{ role: "user" as const, content: user }],
+    };
+    const requestOptions = { signal, timeout: timeoutMs, maxRetries: 0 };
+    if (SERVER_FALLBACK_MODELS.has(model)) {
+      // SDK 0.39 的类型还没有 fallbacks 字段，按 API 文档原样透传。
+      const res = await anthropicClient.beta.messages.create(
+        {
+          ...params,
+          betas: ["server-side-fallback-2026-07-01"],
+          fallbacks: "default",
+        } as unknown as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming,
+        requestOptions,
+      );
+      return completedText(res, outputLimit);
+    }
+    const res = await anthropicClient.messages.create(params, requestOptions);
     return completedText(res, outputLimit);
   });
 }
@@ -262,6 +291,8 @@ comment 写一句很短的中文点评，低于 30 字，说明方向与烈度�
       `${paceNote ? `${paceNote}\n\n` : ""}以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
       1000,
       "light",
+      // 初筛只做粗判断：要不要进深度轮由阈值决定，细致判断留给 alert 模型。
+      { noThinking: true },
     );
     const json = parseJSON(raw);
     return {
@@ -278,6 +309,10 @@ comment 写一句很短的中文点评，低于 30 字，说明方向与烈度�
     console.error("轻量情绪评分解析失败:", e);
     throw e;
   }
+}
+
+function coerceStance(stance: unknown): MentionStance {
+  return stance === "看多" || stance === "看空" || stance === "分歧" ? stance : "中性";
 }
 
 function coerceMentionKind(kind: unknown): MentionKind {
@@ -302,6 +337,7 @@ export async function extractMentions(
 - "那个票""它""这个"等代词不算，不要猜。
 - count = 提到该叫法的消息条数。
 - evidence = 一条最能说明该叫法指代谁的原话，截短到 40 字以内。
+- stance = 群里对该资产的整体看法：看多 / 看空 / 中性 / 分歧（多空都有）。只凭原话判断，拿不准填中性。
 - kind 标注叫法类型：
   - "代码"：叫法就是代码或带代码（如 8035、NVDA、レーザーテック<6920>）。
   - "正式名"：公司/指数的正式名称、常用简称或官方英文/日文/中文名（如 三菱UFJ、AEON、mizuho、日经、TOPIX、东京电子、Tokyo Electron）。
@@ -309,9 +345,11 @@ export async function extractMentions(
 - 最多列 10 个，按提及次数从多到少。没有提到任何资产就返回空数组。
 
 只返回JSON，不要其他文字。字符串值内禁止使用英文双引号：
-{"mentions":[{"term":"...","kind":"代码|正式名|俗称","name":"...","ticker":"...","exchange":"...","count":1,"evidence":"..."}]}`;
+{"mentions":[{"term":"...","kind":"代码|正式名|俗称","name":"...","ticker":"...","exchange":"...","count":1,"stance":"看多|看空|中性|分歧","evidence":"..."}]}`;
 
-  const raw = await chat(system, `以下是 ${messages.length} 条群消息：\n\n${formatted}`, 4000, "light");
+  const raw = await chat(system, `以下是 ${messages.length} 条群消息：\n\n${formatted}`, 2000, "light", {
+    noThinking: true,
+  });
   const json = parseJSON(raw);
   const list = Array.isArray(json.mentions) ? json.mentions : [];
   return list
@@ -323,6 +361,7 @@ export async function extractMentions(
       exchange: String(m.exchange ?? "").trim(),
       count: Math.max(1, Number.parseInt(String(m.count ?? 1), 10) || 1),
       evidence: String(m.evidence ?? "").trim().slice(0, 80),
+      stance: coerceStance(m.stance),
     }))
     .filter((m: MentionedAsset) => m.term.length > 0);
 }
@@ -430,7 +469,9 @@ marketInsight: 针对 topAssets 里的重要资产，用 2-4 句话概括最近�
     const raw = await chat(
       system,
       `以下是实时/近实时行情上下文，只能作为事实参考：\n${marketContext}\n\n${paceNote ? `${paceNote}\n\n` : ""}以下是最近 ${messages.length} 条群消息：\n\n${formatted}`,
-      6000,
+      // Opus 会先思考再输出，思考也占 max_tokens，给足空间避免截断重试。
+      12000,
+      "alert",
     );
     const json = parseJSON(raw);
     const topAssets = Array.isArray(json.topAssets)
@@ -513,7 +554,9 @@ risk: 1句风险提示。
         `最近群消息：`,
         formatted,
       ].join("\n"),
-      1200,
+      // 单票分析跟随告警档，同样用 alert 模型；给思考留出空间。
+      4000,
+      "alert",
     );
     const json = parseJSON(raw);
     return {

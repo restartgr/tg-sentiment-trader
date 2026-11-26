@@ -5,8 +5,10 @@ import {
   getBatchResultById,
   getBatchesInRange,
   getDatabaseStats,
+  listOutcomes,
   type StoredBatch,
 } from "./db";
+import { summarizeOutcomes } from "./market-signals";
 
 type Analysis = { heat?: unknown; hotTopics?: unknown };
 type StoredResult = { quick?: Analysis; analysis?: Analysis };
@@ -39,5 +41,14 @@ export function getDashboardBatch(batchId: number) {
     batch: displayBatch(batch),
     messageCount: getBatchMessageCount(batchId),
     messages: getBatchMessages(batchId, 100),
+  };
+}
+
+// 告警事后验证：按类型/方向汇总 + 最近明细。
+export function getOutcomeSummary(limit = 500) {
+  const rows = listOutcomes(limit);
+  return {
+    stats: summarizeOutcomes(rows),
+    recent: rows.slice(0, 30).map(({ context: _context, ...row }) => row),
   };
 }

@@ -1,5 +1,6 @@
 import { analyzeDailySummary, DailySummaryResult } from "./analyzer";
 import { config } from "./config";
+import { evaluatePendingOutcomes } from "./signals-io";
 import { buildBenchmarkMarketContext } from "./market-data";
 import {
   createTelegramClient,
@@ -70,6 +71,14 @@ async function main(): Promise<void> {
   if (!readSessionString()) {
     console.error("❌ 未找到 session，请先运行: pnpm auth");
     process.exit(1);
+  }
+
+  // 顺带回填告警事后验证（监听进程不在线时也能补上）。
+  try {
+    const n = await evaluatePendingOutcomes();
+    if (n > 0) console.log(`📏 告警验证已回填 ${n} 条`);
+  } catch (error) {
+    console.error("告警验证回填失败:", error);
   }
 
   const currentUnixSec = Math.floor(Date.now() / 1000);

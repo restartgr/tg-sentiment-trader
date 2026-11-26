@@ -154,6 +154,38 @@ export function initDatabase(dbFile = process.env.TG_DB_FILE ?? DEFAULT_DB_FILE)
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       decided_at TEXT
     );
+
+    -- 每批识别到的资产提及（按 Yahoo symbol 归一），用于提及量异动。
+    CREATE TABLE IF NOT EXISTS asset_mentions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      name TEXT NOT NULL,
+      count INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_asset_mentions_group_ts
+      ON asset_mentions(group_id, ts);
+
+    -- 告警事后验证：每次推送记一行/标的，之后回填 1 日、5 日涨跌。
+    CREATE TABLE IF NOT EXISTS alert_outcomes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      alert_ts INTEGER NOT NULL,
+      group_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('sentiment', 'mention')),
+      direction INTEGER NOT NULL,
+      score REAL,
+      heat REAL,
+      label TEXT NOT NULL DEFAULT '',
+      symbol TEXT NOT NULL,
+      base_price REAL NOT NULL,
+      context_json TEXT NOT NULL DEFAULT '{}',
+      ret_1d REAL,
+      ret_5d REAL,
+      evaluated_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_alert_outcomes_pending
+      ON alert_outcomes(ret_5d, alert_ts);
   `);
 
   return database;
@@ -545,6 +577,156 @@ export function decideAlias(id: number, status: "confirmed" | "rejected"): Store
   ).run(status, id);
   const row = db.prepare("SELECT * FROM asset_aliases WHERE id = ?").get(id);
   return row ? rowToAlias(row) : null;
+}
+
+export interface MentionRow {
+  groupId: string;
+  ts: number;
+  symbol: string;
+  name: string;
+  count: number;
+}
+
+export function saveMentions(rows: MentionRow[]): void {
+  if (rows.length === 0) return;
+  const db = getDatabase();
+  const stmt = db.prepare(
+    "INSERT INTO asset_mentions (group_id, ts, symbol, name, count) VALUES (?, ?, ?, ?, ?)",
+  );
+  db.transaction(() => {
+    for (const r of rows) stmt.run(r.groupId, r.ts, r.symbol, r.name, r.count);
+  })();
+}
+
+export function sumMentionsBySymbol(
+  groupId: string,
+  fromTs: number,
+  toTs: number,
+): Map<string, { count: number; name: string }> {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT symbol, MAX(name) AS name, SUM(count) AS total FROM asset_mentions
+       WHERE group_id = ? AND ts >= ? AND ts < ? GROUP BY symbol`,
+    )
+    .all(groupId, fromTs, toTs) as { symbol: string; name: string; total: number }[];
+  return new Map(rows.map((r) => [r.symbol, { count: r.total, name: r.name }]));
+}
+
+export function earliestMentionTs(groupId: string): number | null {
+  const row = getDatabase()
+    .prepare("SELECT MIN(ts) AS ts FROM asset_mentions WHERE group_id = ?")
+    .get(groupId) as { ts: number | null };
+  return row.ts;
+}
+
+// 有消息的时间窗个数：基线按"群里有人说话的时段"平均，不被夜间空白稀释。
+export function countActiveWindows(
+  groupId: string,
+  fromTs: number,
+  toTs: number,
+  windowMs: number,
+): number {
+  const row = getDatabase()
+    .prepare(
+      `SELECT COUNT(DISTINCT message_ts / ?) AS n FROM messages
+       WHERE group_id = ? AND message_ts >= ? AND message_ts < ?`,
+    )
+    .get(windowMs, groupId, fromTs, toTs) as { n: number };
+  return row.n;
+}
+
+export interface AlertOutcomeInput {
+  alertTs: number;
+  groupId: string;
+  kind: "sentiment" | "mention";
+  direction: number;
+  score: number | null;
+  heat: number | null;
+  label: string;
+  symbol: string;
+  basePrice: number;
+  context: unknown;
+}
+
+export interface StoredAlertOutcome extends Omit<AlertOutcomeInput, "context"> {
+  id: number;
+  context: unknown;
+  ret1d: number | null;
+  ret5d: number | null;
+  evaluatedAt: number | null;
+}
+
+export function saveAlertOutcome(input: AlertOutcomeInput): number {
+  const result = getDatabase()
+    .prepare(
+      `INSERT INTO alert_outcomes
+        (alert_ts, group_id, kind, direction, score, heat, label, symbol, base_price, context_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.alertTs,
+      input.groupId,
+      input.kind,
+      input.direction,
+      input.score,
+      input.heat,
+      input.label,
+      input.symbol,
+      input.basePrice,
+      JSON.stringify(input.context ?? {}),
+    );
+  return Number(result.lastInsertRowid);
+}
+
+function rowToOutcome(row: any): StoredAlertOutcome {
+  let context: unknown = {};
+  try {
+    context = JSON.parse(row.context_json);
+  } catch {
+    context = {};
+  }
+  return {
+    id: row.id,
+    alertTs: row.alert_ts,
+    groupId: row.group_id,
+    kind: row.kind,
+    direction: row.direction,
+    score: row.score,
+    heat: row.heat,
+    label: row.label,
+    symbol: row.symbol,
+    basePrice: row.base_price,
+    context,
+    ret1d: row.ret_1d,
+    ret5d: row.ret_5d,
+    evaluatedAt: row.evaluated_at,
+  };
+}
+
+// 只回填 [sinceTs, beforeTs) 内的：太老还没数据的（停牌/代码失效）不再反复去拉。
+export function listPendingOutcomes(sinceTs: number, beforeTs: number): StoredAlertOutcome[] {
+  return getDatabase()
+    .prepare(
+      "SELECT * FROM alert_outcomes WHERE ret_5d IS NULL AND alert_ts >= ? AND alert_ts < ? ORDER BY id",
+    )
+    .all(sinceTs, beforeTs)
+    .map(rowToOutcome);
+}
+
+export function updateOutcomeReturns(id: number, ret1d: number | null, ret5d: number | null): void {
+  getDatabase()
+    .prepare(
+      `UPDATE alert_outcomes SET ret_1d = COALESCE(?, ret_1d), ret_5d = ?, evaluated_at = ?
+       WHERE id = ?`,
+    )
+    .run(ret1d, ret5d, Date.now(), id);
+}
+
+export function listOutcomes(limit = 500): StoredAlertOutcome[] {
+  return getDatabase()
+    .prepare("SELECT * FROM alert_outcomes ORDER BY alert_ts DESC LIMIT ?")
+    .all(limit)
+    .map(rowToOutcome);
 }
 
 export function closeDatabase(): void {

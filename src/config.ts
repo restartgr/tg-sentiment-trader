@@ -61,6 +61,8 @@ export const config = {
     // Haiku 在首轮情绪评分上偏差过大，light 默认也使用 Sonnet 5（可经 env 覆盖）。
     modelLight: process.env.MODEL_LIGHT ?? "claude-sonnet-5",
     modelDeep: process.env.MODEL_DEEP ?? "claude-sonnet-5",
+    // 实时告警的深度分析与单票分析：触发少、最需要判断力，默认用 Opus 5.5。
+    modelAlert: process.env.MODEL_ALERT ?? "claude-opus-5-5",
   },
   keywords: {
     // 包含这些词就触发 AI 分析（不区分买卖，由 AI 判断）
@@ -97,6 +99,14 @@ export const config = {
     // 同一个群的告警冷却（分钟）；冷却期内强度比上次高出 ALERT_ESCALATION_DELTA 才再推。
     alertCooldownMinutes: parseFloatEnv("ALERT_COOLDOWN_MINUTES", 30),
     alertEscalationDelta: parseFloatEnv("ALERT_ESCALATION_DELTA", 0.05),
+    // 提及量异动：近 N 分钟被提次数 >= MIN_COUNT 且 >= 平时同长度窗口的 RATIO 倍才推送
+    mentionWindowMinutes: parseFloatEnv("MENTION_WINDOW_MINUTES", 30),
+    mentionLookbackDays: parseFloatEnv("MENTION_LOOKBACK_DAYS", 7),
+    mentionSpikeMinCount: parseFloatEnv("MENTION_SPIKE_MIN_COUNT", 8),
+    mentionSpikeRatio: parseFloatEnv("MENTION_SPIKE_RATIO", 4),
+    mentionCooldownMinutes: parseFloatEnv("MENTION_COOLDOWN_MINUTES", 120),
+    // 只盯这些 Yahoo symbol（逗号分隔，如 8035.T,6857.T,NVDA）；留空 = 全部
+    mentionWatchlist: parseList(process.env.MENTION_WATCHLIST ?? ""),
     // 单票详细分析：>= 此值才逐个跑 Top 资产单票分析
     assetDetailMinAbsScore: parseFloatEnv("ASSET_DETAIL_MIN_ABS_SCORE", 0.65),
     // 单票详细分析数量

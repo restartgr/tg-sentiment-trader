@@ -1,7 +1,6 @@
 // 黑话自动学习：每批消息跑一次资产识别，发现词典里没有的新叫法
 // → Yahoo 验证代码真实存在 → 记为 pending → bot 发给你确认（✅/❌）。
 // 确认后写入数据库，下一批分析的词典提示立刻带上它。
-import { extractMentions } from "./analyzer";
 import {
   dictionaryTerms,
   findNewAliasCandidates,
@@ -14,14 +13,13 @@ import { decideAlias, insertAliasCandidate, listAliases } from "./db";
 import { fetchYahooQuote, toYahooSymbol } from "./market-data";
 import { aliasCallbackData, formatAliasCandidate, parseAliasCallback } from "./alias-format";
 
-export async function learnAliasesFromBatch(params: {
+export async function learnAliasesFromMentions(params: {
   groupId: string;
   groupLabel: string;
-  messages: { username: string; text: string }[];
+  mentions: MentionedAsset[];
   bot: BotTarget | null;
 }): Promise<void> {
-  const { groupId, groupLabel, messages, bot } = params;
-  const mentions = await extractMentions(messages);
+  const { groupId, groupLabel, mentions, bot } = params;
   if (mentions.length === 0) return;
 
   // 已问过的（任何状态，含已拒绝）都不再问。

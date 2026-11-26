@@ -17,7 +17,7 @@ export interface MarketQuote {
   marketTime?: string;
 }
 
-interface ChartBar {
+export interface ChartBar {
   time: number;
   open: number;
   high: number;
@@ -223,7 +223,7 @@ export async function fetchYahooQuote(symbol: string): Promise<MarketQuote | nul
   }
 }
 
-async function fetchYahooChart(
+export async function fetchYahooChart(
   symbol: string,
   range: string,
   interval: string,

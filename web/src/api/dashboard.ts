@@ -4,6 +4,7 @@ import type {
   Batch,
   BatchDetail,
   CostSummary,
+  OutcomeSummary,
   RunTrace,
   Stats,
 } from "./types";
@@ -40,4 +41,8 @@ export function askAgent(question: string, signal: AbortSignal) {
     body: JSON.stringify({ question }),
     signal,
   });
+}
+
+export function fetchOutcomes(signal: AbortSignal) {
+  return requestJson<OutcomeSummary>("/api/outcomes", { signal });
 }

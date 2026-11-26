@@ -30,7 +30,13 @@ import {
 import { runUserReport } from "./user-report";
 import { decideAlert, LastAlert } from "./alert-gate";
 import { BotTarget, sendAlert, startCallbackPoller } from "./bot-notify";
-import { handleAliasCallback, learnAliasesFromBatch } from "./alias-learning";
+import { handleAliasCallback } from "./alias-learning";
+import {
+  buildMarketCheck,
+  evaluatePendingOutcomes,
+  recordSentimentOutcome,
+  runMentionPipeline,
+} from "./signals-io";
 import {
   decideDeepOutcome,
   heatDriverEmoji,
@@ -323,13 +329,14 @@ async function main() {
 
     const paceNote = describePace(buffer);
 
-    // 黑话学习与情绪分析并行、互不影响：失败只记日志。
-    void learnAliasesFromBatch({
+    // 提及识别（黑话学习 + 提及量异动）与情绪分析并行、互不影响：失败只记日志。
+    void runMentionPipeline({
+      client,
+      bot: alertBot,
       groupId,
       groupLabel: groupLabels.get(groupId) ?? groupId,
       messages: buffer,
-      bot: alertBot,
-    }).catch((err) => console.error("黑话学习失败:", err));
+    }).catch((err) => console.error("提及识别流水线失败:", err));
 
     try {
       const quick = await analyzeBatchScore(buffer, paceNote);
@@ -501,15 +508,37 @@ async function main() {
       }
       lastAlerts.set(groupId, { at: Date.now(), intensity: alertDecision.intensity });
 
+      // 行情交叉验证：价格背离 + 外部波动率；同时记下当时价格用于事后验证。
+      const marketCheck = await buildMarketCheck({
+        label: result.label,
+        score: result.score,
+        heat: result.heat,
+        summary: result.summary,
+      }).catch((err) => {
+        console.error("行情交叉验证失败:", err);
+        return null;
+      });
+      const checkText = marketCheck ? `\n\n${marketCheck.lines.join("\n")}` : "";
+      if (marketCheck) {
+        void recordSentimentOutcome({
+          groupId,
+          score: result.score,
+          heat: result.heat,
+          label: `${outcome}/${result.label}`,
+          check: marketCheck,
+          assets: result.topAssets,
+        }).catch((err) => console.error("告警验证记录失败:", err));
+      }
+
       // 方向回落且烈度也降下来：仅发总览。
       if (outcome === "downgraded") {
-        await sendAlert(client, alertBot, formatDowngradedAnalysis(result));
+        await sendAlert(client, alertBot, formatDowngradedAnalysis(result) + checkText);
         return;
       }
 
       // 纯 heat 触发、finalHeat 达标：推送情绪过热摘要，无交易内容。
       if (outcome === "overheat_push") {
-        await sendAlert(client, alertBot, formatOverheatAlert(result));
+        await sendAlert(client, alertBot, formatOverheatAlert(result) + checkText);
         return;
       }
 
@@ -518,7 +547,7 @@ async function main() {
         await sendAlert(
           client,
           alertBot,
-          formatDirectionUpgradedNoMarket(result),
+          formatDirectionUpgradedNoMarket(result) + checkText,
         );
         return;
       }
@@ -570,7 +599,7 @@ async function main() {
         .filter((l) => l !== "")
         .join("\n");
 
-      await sendAlert(client, alertBot, msg);
+      await sendAlert(client, alertBot, msg + checkText);
 
       if (!rule.runAssetDetail) {
         console.log(`⏭️ 当前档位 ${rule.tier}，仅发送总览`);
@@ -657,6 +686,25 @@ async function main() {
     );
     console.log(`⏰ 发言追踪已排程：${config.telegram.userReportCron} (JST)`);
   }
+
+  // 告警事后验证：日股收盘后回填一次 1/5 日涨跌（19:05 日报也会顺带回填）。
+  let outcomesRunning = false;
+  cron.schedule(
+    "30 16 * * 1-5",
+    async () => {
+      if (outcomesRunning) return;
+      outcomesRunning = true;
+      try {
+        const n = await evaluatePendingOutcomes();
+        if (n > 0) console.log(`📏 告警验证已回填 ${n} 条`);
+      } catch (error) {
+        console.error("告警验证回填失败:", error);
+      } finally {
+        outcomesRunning = false;
+      }
+    },
+    { timezone: "Asia/Tokyo" },
+  );
 
   client.addEventHandler(
     async (event: NewMessageEvent) => {

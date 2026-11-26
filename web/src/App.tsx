@@ -2,6 +2,7 @@ import { useIsFetching, useQueryClient } from "@tanstack/react-query";
 import { AgentPanel } from "./components/AgentPanel";
 import { BatchDrawer } from "./components/BatchDrawer";
 import { BatchTable } from "./components/BatchTable";
+import { OutcomePanel } from "./components/OutcomePanel";
 import { SiteHeader } from "./components/SiteHeader";
 import { StatsGrid } from "./components/StatsGrid";
 import { TrendPanel } from "./components/TrendPanel";
@@ -10,7 +11,7 @@ import { useSelectedBatch } from "./hooks/useSelectedBatch";
 import { dateFormat, errorMessage } from "./lib/format";
 
 // "刷新数据"按钮负责的查询；批次详情和 trace 不随它刷新
-const DASHBOARD_QUERIES: unknown[] = ["stats", "batches", "costs"];
+const DASHBOARD_QUERIES: unknown[] = ["stats", "batches", "costs", "outcomes"];
 
 function RefreshIcon() {
   return (
@@ -81,6 +82,7 @@ export default function App() {
               loading={batches.isPending}
               onOpenBatch={openBatch}
             />
+            <OutcomePanel />
           </div>
           <AgentPanel onOpenBatch={openBatch} />
         </div>
