@@ -35,6 +35,7 @@ async function chat(
   user: string,
   maxTokens: number,
   tier: ModelTier = "deep",
+  options: { noThinking?: boolean } = {},
 ): Promise<string> {
   const model = pickModel(tier);
   const attemptTimeoutMs = tier === "deep" ? 180_000 : 60_000;
@@ -51,6 +52,8 @@ async function chat(
     const res = await anthropicClient.messages.create({
       model,
       max_tokens: outputLimit,
+      // 机械性的抽取任务不需要思考：思考 token 按输出价计费，关掉能省大半成本。
+      ...(options.noThinking ? { thinking: { type: "disabled" as const } } : {}),
       system,
       messages: [{ role: "user", content: user }],
     }, { signal, timeout: timeoutMs, maxRetries: 0 });
@@ -316,7 +319,9 @@ export async function extractMentions(
 只返回JSON，不要其他文字。字符串值内禁止使用英文双引号：
 {"mentions":[{"term":"...","kind":"代码|正式名|俗称","name":"...","ticker":"...","exchange":"...","count":1,"stance":"看多|看空|中性|分歧","evidence":"..."}]}`;
 
-  const raw = await chat(system, `以下是 ${messages.length} 条群消息：\n\n${formatted}`, 4000, "light");
+  const raw = await chat(system, `以下是 ${messages.length} 条群消息：\n\n${formatted}`, 2000, "light", {
+    noThinking: true,
+  });
   const json = parseJSON(raw);
   const list = Array.isArray(json.mentions) ? json.mentions : [];
   return list
