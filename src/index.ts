@@ -28,6 +28,8 @@ import {
   sendToSavedMessages,
 } from "./telegram-utils";
 import { runUserReport } from "./user-report";
+import { decideAlert, LastAlert } from "./alert-gate";
+import { BotTarget, sendAlert } from "./bot-notify";
 import {
   decideDeepOutcome,
   heatDriverEmoji,
@@ -150,20 +152,6 @@ function formatHeatLine(heat: number): string {
   return `🔥 烈度：${(heat * 100).toFixed(0)}%（${level}）`;
 }
 
-
-function formatQuickScore(result: BatchScoreResult): string {
-  const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
-
-  return [
-    `${emoji} 情绪总览：${result.label} (${(result.score * 100).toFixed(0)}%)`,
-    formatHeatLine(result.heat),
-    result.dominantEmotion ? `🎭 ${result.dominantEmotion}` : "",
-    `💬 ${result.comment}`,
-    `🧭 日常波动，暂不深入分析。`,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
 
 function formatDowngradedAnalysis(result: BatchAnalysisResult): string {
   const emoji = result.score > 0 ? "📈" : result.score < 0 ? "📉" : "➖";
@@ -298,6 +286,21 @@ async function main() {
 
   const messageBuffers = new Map<string, BufferedMessage[]>();
 
+  // 实时告警：只推"夸张"的批次，其余只落库。冷却状态在内存里，重启后清零。
+  const alertBot: BotTarget | null = config.telegram.botToken
+    ? { token: config.telegram.botToken, chatId: config.telegram.myUserId.toString() }
+    : null;
+  const lastAlerts = new Map<string, LastAlert>();
+  const alertThresholds = {
+    minAbsScore: config.sentiment.alertMinAbsScore,
+    minHeat: config.sentiment.alertMinHeat,
+    cooldownMs: config.sentiment.alertCooldownMinutes * 60_000,
+    escalationDelta: config.sentiment.alertEscalationDelta,
+  };
+  console.log(
+    `🔔 告警出口：${alertBot ? "Bot 私聊" : "已保存消息"} | 门槛 |score|>=${alertThresholds.minAbsScore} 或 heat>=${alertThresholds.minHeat} | 冷却 ${config.sentiment.alertCooldownMinutes} 分钟`,
+  );
+
   async function runBatchAnalysis(groupId: string, buffer: BufferedMessage[]) {
     const { startTime, endTime } = getBatchTimeRange(buffer);
     const messageIds = buffer.map((message) => message.dbId);
@@ -363,7 +366,7 @@ async function main() {
           finalHeatDriver: "",
           marketContextLoaded: false,
           deepDirectionUpgraded: false,
-          alertPushed: true,
+          alertPushed: false,
           initialTier: "",
           finalTier: "quick",
         };
@@ -386,7 +389,6 @@ async function main() {
         console.log(
           `📎 轻量总览 | ${quick.label}(${quick.score.toFixed(2)}) 烈度${quick.heat.toFixed(2)} 来源${quick.heatDriver} | ${quick.comment}`,
         );
-        await sendToSavedMessages(client, formatQuickScore(quick));
         return;
       }
 
@@ -413,7 +415,14 @@ async function main() {
         heatPushThreshold: config.sentiment.heatPushThreshold,
       });
       const finalTier = directionRule?.tier ?? outcome;
-      const alertPushed = outcome !== "overheat_silent";
+      const alertDecision = decideAlert({
+        score: result.score,
+        heat: result.heat,
+        now: Date.now(),
+        last: lastAlerts.get(groupId),
+        thresholds: alertThresholds,
+      });
+      const alertPushed = outcome !== "overheat_silent" && alertDecision.push;
 
       const log = {
         ...logBase,
@@ -423,6 +432,13 @@ async function main() {
         marketContextLoaded: pullMarket,
         deepDirectionUpgraded,
         alertPushed,
+        alertSkipReason: alertPushed
+          ? ""
+          : outcome === "overheat_silent"
+            ? "overheat_silent"
+            : alertDecision.push
+              ? ""
+              : alertDecision.reason,
         initialTier: quickDirectionRule?.tier ?? "",
         finalTier,
       };
@@ -447,12 +463,6 @@ async function main() {
         `📊 深度分析 | ${outcome} | 交易档:${directionRule?.tier ?? "无"} | ${result.label}(${result.score.toFixed(2)}) 烈度${result.heat.toFixed(2)} 来源${result.heatDriver} | 行情:${pullMarket ? "是" : "否"}`,
       );
 
-      // 方向回落且烈度也降下来：仅发总览。
-      if (outcome === "downgraded") {
-        await sendToSavedMessages(client, formatDowngradedAnalysis(result));
-        return;
-      }
-
       // 纯 heat 触发、finalHeat 未达推送阈值：只落库+日志，不推送。
       if (outcome === "overheat_silent") {
         console.log(
@@ -461,16 +471,32 @@ async function main() {
         return;
       }
 
+      // 不够夸张或同群冷却中：只落库+日志。
+      if (!alertPushed) {
+        console.log(
+          `🔕 未推送(${alertDecision.push ? "" : alertDecision.reason}) | 强度${alertDecision.intensity.toFixed(2)}，仅记录`,
+        );
+        return;
+      }
+      lastAlerts.set(groupId, { at: Date.now(), intensity: alertDecision.intensity });
+
+      // 方向回落且烈度也降下来：仅发总览。
+      if (outcome === "downgraded") {
+        await sendAlert(client, alertBot, formatDowngradedAnalysis(result));
+        return;
+      }
+
       // 纯 heat 触发、finalHeat 达标：推送情绪过热摘要，无交易内容。
       if (outcome === "overheat_push") {
-        await sendToSavedMessages(client, formatOverheatAlert(result));
+        await sendAlert(client, alertBot, formatOverheatAlert(result));
         return;
       }
 
       // 纯 heat 触发但 Deep 把 score 抬到方向档：本轮未拉行情，不输出交易内容。
       if (outcome === "direction_upgraded_no_market") {
-        await sendToSavedMessages(
+        await sendAlert(
           client,
+          alertBot,
           formatDirectionUpgradedNoMarket(result),
         );
         return;
@@ -523,7 +549,7 @@ async function main() {
         .filter((l) => l !== "")
         .join("\n");
 
-      await sendToSavedMessages(client, msg);
+      await sendAlert(client, alertBot, msg);
 
       if (!rule.runAssetDetail) {
         console.log(`⏭️ 当前档位 ${rule.tier}，仅发送总览`);
@@ -532,7 +558,7 @@ async function main() {
 
       for (const asset of result.topAssets.slice(0, config.sentiment.assetDetailCount)) {
         const detail = await analyzeAssetDetail(asset, result, buffer);
-        await sendToSavedMessages(client, formatAssetDetail(detail));
+        await sendAlert(client, alertBot, formatAssetDetail(detail));
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

@@ -45,6 +45,9 @@ export const config = {
     // 你自己的 Telegram user ID（用于接收提醒）
     myUserId: parseIntEnv("TG_MY_USER_ID"),
     bombTarget: process.env.TG_BOMB_TARGET ?? "",
+    // 实时告警 bot（@BotFather 创建）；留空则告警退回「已保存消息」。
+    // 需先在 TG 里给 bot 发一次 /start，bot 才能私聊你（chat_id 即 TG_MY_USER_ID）。
+    botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",
     // 发言追踪：要单独追踪的群成员数字 user ID（逗号分隔），用于 pnpm user-report
     watchUserIds: parseList(process.env.TG_WATCH_USER_IDS ?? ""),
     // 监听进程内触发发言追踪的 cron（JST），例如 "0 12 * * 1-5"；留空不启用
@@ -88,6 +91,12 @@ export const config = {
     ),
     // 纯烈度告警的推送门槛：finalHeat >= 此值才推送"情绪过热"摘要（低于则只落库+日志）。
     heatPushThreshold: parseFloatEnv("HEAT_PUSH_THRESHOLD", 0.8),
+    // 实时告警门槛：深度复核后 |score| >= 此值或 heat >= ALERT_MIN_HEAT 才推送，其余只落库。
+    alertMinAbsScore: parseFloatEnv("ALERT_MIN_ABS_SCORE", 0.8),
+    alertMinHeat: parseFloatEnv("ALERT_MIN_HEAT", 0.85),
+    // 同一个群的告警冷却（分钟）；冷却期内强度比上次高出 ALERT_ESCALATION_DELTA 才再推。
+    alertCooldownMinutes: parseFloatEnv("ALERT_COOLDOWN_MINUTES", 30),
+    alertEscalationDelta: parseFloatEnv("ALERT_ESCALATION_DELTA", 0.05),
     // 单票详细分析：>= 此值才逐个跑 Top 资产单票分析
     assetDetailMinAbsScore: parseFloatEnv("ASSET_DETAIL_MIN_ABS_SCORE", 0.65),
     // 单票详细分析数量
