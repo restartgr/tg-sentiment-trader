@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config";
-import { loadDictionary, MentionedAsset, MentionKind } from "./asset-dictionary";
+import { loadDictionary, MentionedAsset, MentionKind, MentionStance } from "./asset-dictionary";
 import { buildAssetMarketContext, buildMarketContext } from "./market-data";
 import { derivePanicMetrics } from "./panic-metrics";
 import { coerceHeatDriver, HeatDriver } from "./routing";
@@ -280,6 +280,10 @@ comment 写一句很短的中文点评，低于 30 字，说明方向与烈度�
   }
 }
 
+function coerceStance(stance: unknown): MentionStance {
+  return stance === "看多" || stance === "看空" || stance === "分歧" ? stance : "中性";
+}
+
 function coerceMentionKind(kind: unknown): MentionKind {
   return kind === "代码" || kind === "俗称" ? kind : "正式名";
 }
@@ -302,6 +306,7 @@ export async function extractMentions(
 - "那个票""它""这个"等代词不算，不要猜。
 - count = 提到该叫法的消息条数。
 - evidence = 一条最能说明该叫法指代谁的原话，截短到 40 字以内。
+- stance = 群里对该资产的整体看法：看多 / 看空 / 中性 / 分歧（多空都有）。只凭原话判断，拿不准填中性。
 - kind 标注叫法类型：
   - "代码"：叫法就是代码或带代码（如 8035、NVDA、レーザーテック<6920>）。
   - "正式名"：公司/指数的正式名称、常用简称或官方英文/日文/中文名（如 三菱UFJ、AEON、mizuho、日经、TOPIX、东京电子、Tokyo Electron）。
@@ -309,7 +314,7 @@ export async function extractMentions(
 - 最多列 10 个，按提及次数从多到少。没有提到任何资产就返回空数组。
 
 只返回JSON，不要其他文字。字符串值内禁止使用英文双引号：
-{"mentions":[{"term":"...","kind":"代码|正式名|俗称","name":"...","ticker":"...","exchange":"...","count":1,"evidence":"..."}]}`;
+{"mentions":[{"term":"...","kind":"代码|正式名|俗称","name":"...","ticker":"...","exchange":"...","count":1,"stance":"看多|看空|中性|分歧","evidence":"..."}]}`;
 
   const raw = await chat(system, `以下是 ${messages.length} 条群消息：\n\n${formatted}`, 4000, "light");
   const json = parseJSON(raw);
@@ -323,6 +328,7 @@ export async function extractMentions(
       exchange: String(m.exchange ?? "").trim(),
       count: Math.max(1, Number.parseInt(String(m.count ?? 1), 10) || 1),
       evidence: String(m.evidence ?? "").trim().slice(0, 80),
+      stance: coerceStance(m.stance),
     }))
     .filter((m: MentionedAsset) => m.term.length > 0);
 }

@@ -22,7 +22,10 @@ export interface MentionedAsset {
   exchange: string;
   count: number;
   evidence: string;
+  stance: MentionStance; // 群里对它的看法
 }
+
+export type MentionStance = "看多" | "看空" | "中性" | "分歧";
 
 export function normalizeTerm(term: string): string {
   return term.trim().toLowerCase();

@@ -19,6 +19,7 @@ const mention = (term: string, ticker = "8035", kind: "代码" | "正式名" | "
   exchange: "东京证券交易所",
   count: 2,
   evidence: "电王今天又拉了",
+  stance: "看多" as const,
 });
 
 test("mergeConfirmedAliases: 同一只票并入 aliases，新票追加条目", () => {

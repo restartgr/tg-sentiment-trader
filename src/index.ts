@@ -509,7 +509,12 @@ async function main() {
       lastAlerts.set(groupId, { at: Date.now(), intensity: alertDecision.intensity });
 
       // 行情交叉验证：价格背离 + 外部波动率；同时记下当时价格用于事后验证。
-      const marketCheck = await buildMarketCheck(result.score).catch((err) => {
+      const marketCheck = await buildMarketCheck({
+        label: result.label,
+        score: result.score,
+        heat: result.heat,
+        summary: result.summary,
+      }).catch((err) => {
         console.error("行情交叉验证失败:", err);
         return null;
       });

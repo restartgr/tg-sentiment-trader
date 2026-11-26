@@ -5,7 +5,9 @@ import {
   computeReturns,
   detectSpikes,
   externalVerdict,
+  formatMarketCheckBlock,
   formatSpike,
+  smaDeviation,
   parseNikkeiViCsv,
   summarizeOutcomes,
 } from "./market-signals";
@@ -17,6 +19,29 @@ test("externalVerdict: 群内恐慌 + VIX 高 = 双重确认", () => {
   assert.equal(externalVerdict(0.85, { vix: { value: 20 }, nikkeiVi: { value: 33, date: "" } }), "group_early_greed");
   assert.equal(externalVerdict(-0.8, { vix: { value: 20 }, nikkeiVi: null }), "neutral");
   assert.equal(externalVerdict(-0.8, { vix: null, nikkeiVi: null }), "unknown");
+});
+
+test("均线乖离并入外部判断：日经超卖算恐慌，过热算放松", () => {
+  assert.equal(externalVerdict(-0.8, { vix: { value: 20 }, nikkeiVi: null, n225Dev25: -6 }), "double_fear");
+  assert.equal(externalVerdict(0.8, { vix: { value: 20 }, nikkeiVi: null, n225Dev25: 6 }), "double_greed");
+  assert.equal(externalVerdict(0.8, { vix: null, nikkeiVi: null, n225Dev25: 1, spxDev125: 3 }), "neutral");
+});
+
+test("smaDeviation: 收盘相对 n 日均线的百分比", () => {
+  assert.equal(smaDeviation([100, 100, 100, 110], 4), (110 - 102.5) / 102.5 * 100);
+  assert.equal(smaDeviation([1, 2], 3), null);
+});
+
+test("formatMarketCheckBlock: 含群内读数、背离、外部与结论", () => {
+  const lines = formatMarketCheckBlock(
+    { label: "极度悲观", score: -0.85, heat: 0.9, summary: "多头集体自嘲跌停" },
+    { name: "Nikkei 225", changePercent: 0.85 },
+    { vix: { value: 28.3 }, nikkeiVi: { value: 33.4, date: "2026/11/25" }, n225Dev25: 1.2, spxDev125: 3 },
+  );
+  const text = lines.join("\n");
+  for (const part of ["群内：极度悲观 -85% · 烈度 90%｜多头集体自嘲跌停", "指数并未下跌", "日经 25日乖离 +1.20%（中性）", "双重确认", "💡"]) {
+    assert.ok(text.includes(part), part);
+  }
 });
 
 test("classifyDivergence: 恐慌跌得少 / 亢奋涨不动", () => {
@@ -41,8 +66,14 @@ test("detectSpikes: 次数和倍数都达标才算，按倍数排序", () => {
   const spikes = detectSpikes(current, history, 100, { minCount: 8, ratio: 4, baselineFloor: 0.5 });
   assert.deepEqual(spikes.map((s) => s.symbol), ["8035.T"]);
   assert.equal(spikes[0].baselinePerWindow, 3);
-  const text = formatSpike(spikes[0], 30, "测试群", { price: 25000, currency: "JPY", changePercent: -3.2 });
-  assert.ok(text.includes("近 30 分钟被提 25 次") && text.includes("-3.20%"));
+  const text = formatSpike(spikes[0], 30, "测试群", { price: 25000, currency: "JPY", changePercent: -3.2 }, [
+    { stance: "看空", evidence: "电子要崩了" },
+    { stance: "看空", evidence: "东电割了" },
+    { stance: "看多", evidence: "抄底东电" },
+  ]);
+  for (const part of ["近 30 分钟被提 25 次", "-3.20%", "群内看法：看空×2、看多", "💬 电子要崩了"]) {
+    assert.ok(text.includes(part), part);
+  }
 });
 
 test("detectSpikes: 冷门股平时 0 次用基线下限", () => {

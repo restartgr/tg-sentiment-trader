@@ -18,10 +18,12 @@ import {
   computeReturns,
   detectSpikes,
   ExternalSnapshot,
-  formatDivergenceLine,
-  formatExternalLines,
+  formatMarketCheckBlock,
   formatSpike,
+  GroupReading,
+  MentionView,
   parseNikkeiViCsv,
+  smaDeviation,
 } from "./market-signals";
 
 const NKVI_CSV_URL =
@@ -45,11 +47,23 @@ async function fetchNikkeiVi(): Promise<ExternalSnapshot["nikkeiVi"]> {
   return value;
 }
 
+async function fetchDeviation(symbol: string, n: number): Promise<number | null> {
+  const bars = await fetchYahooChart(symbol, "1y", "1d");
+  return smaDeviation(bars.map((b) => b.close), n);
+}
+
 export async function fetchExternalSnapshot(): Promise<ExternalSnapshot> {
-  const [vixQuote, nikkeiVi] = await Promise.all([fetchYahooQuote("^VIX"), fetchNikkeiVi()]);
+  const [vixQuote, nikkeiVi, n225Dev25, spxDev125] = await Promise.all([
+    fetchYahooQuote("^VIX"),
+    fetchNikkeiVi(),
+    fetchDeviation("^N225", 25),
+    fetchDeviation("^GSPC", 125),
+  ]);
   return {
     vix: vixQuote ? { value: vixQuote.price, changePercent: vixQuote.changePercent } : null,
     nikkeiVi,
+    n225Dev25,
+    spxDev125,
   };
 }
 
@@ -63,8 +77,8 @@ export interface MarketCheck {
   index: MarketQuote | null;
 }
 
-// 情绪告警附加：价格背离 + 外部指标共振。
-export async function buildMarketCheck(score: number): Promise<MarketCheck> {
+// 情绪告警附加：群内读数 + 价格背离 + 外部指标共振 + 一句结论。
+export async function buildMarketCheck(group: GroupReading): Promise<MarketCheck> {
   const [external, index] = await Promise.all([
     fetchExternalSnapshot(),
     fetchYahooQuote(benchmarkSymbol()),
@@ -74,7 +88,7 @@ export async function buildMarketCheck(score: number): Promise<MarketCheck> {
       ? { name: index.name, changePercent: index.changePercent }
       : null;
   return {
-    lines: [formatDivergenceLine(score, indexInfo), ...formatExternalLines(score, external)],
+    lines: formatMarketCheckBlock(group, indexInfo, external),
     external,
     index,
   };
@@ -144,7 +158,15 @@ export async function runMentionPipeline(params: {
     console.error("黑话学习失败:", err),
   );
 
-  await checkMentionSpikes({ client, bot, groupId, groupLabel, now: ts });
+  // 本批里每只票的看法和原话，附在异动推送里。
+  const views = new Map<string, MentionView[]>();
+  for (const m of mentions) {
+    const symbol = toYahooSymbol(m);
+    if (!symbol) continue;
+    views.set(symbol, [...(views.get(symbol) ?? []), { stance: m.stance, evidence: m.evidence }]);
+  }
+
+  await checkMentionSpikes({ client, bot, groupId, groupLabel, now: ts, views });
 }
 
 async function checkMentionSpikes(params: {
@@ -153,8 +175,9 @@ async function checkMentionSpikes(params: {
   groupId: string;
   groupLabel: string;
   now: number;
+  views: Map<string, MentionView[]>;
 }): Promise<void> {
-  const { client, bot, groupId, groupLabel, now } = params;
+  const { client, bot, groupId, groupLabel, now, views } = params;
   const s = config.sentiment;
   const windowMs = s.mentionWindowMinutes * 60_000;
   const lookbackStart = now - s.mentionLookbackDays * 24 * 3600_000;
@@ -183,7 +206,7 @@ async function checkMentionSpikes(params: {
     lastSpikeAlerts.set(key, { at: now, count: spike.count });
 
     const quote = await fetchYahooQuote(spike.symbol);
-    await sendAlert(client, bot, formatSpike(spike, s.mentionWindowMinutes, groupLabel, quote));
+    await sendAlert(client, bot, formatSpike(spike, s.mentionWindowMinutes, groupLabel, quote, views.get(spike.symbol) ?? []));
     console.log(`🗣️ 提及异动 ${spike.symbol} ${spike.count} 次（${spike.ratio.toFixed(1)} 倍）`);
     if (quote) {
       saveAlertOutcome({
