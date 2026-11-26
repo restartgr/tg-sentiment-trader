@@ -61,6 +61,8 @@ export const config = {
     // Haiku 在首轮情绪评分上偏差过大，light 默认也使用 Sonnet 5（可经 env 覆盖）。
     modelLight: process.env.MODEL_LIGHT ?? "claude-sonnet-5",
     modelDeep: process.env.MODEL_DEEP ?? "claude-sonnet-5",
+    // 实时告警的深度分析与单票分析：触发少、最需要判断力，默认用 Opus 5.5。
+    modelAlert: process.env.MODEL_ALERT ?? "claude-opus-5-5",
   },
   keywords: {
     // 包含这些词就触发 AI 分析（不区分买卖，由 AI 判断）

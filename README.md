@@ -244,7 +244,7 @@ pnpm dashboard
 | `TG_MY_USER_ID` | 你自己的 Telegram User ID（发消息给 @userinfobot 获取） |
 | `ANTHROPIC_API_KEY` | Anthropic API Key（必填） |
 | `OPENAI_API_KEY` | OpenAI API Key（运行本地 Agent runner 时必填） |
-| `MODEL_LIGHT` / `MODEL_DEEP` | 模型分层（可选）：light 跑高频轻量评分，deep 跑深度分析（两者默认均为 `claude-sonnet-5`） |
+| `MODEL_LIGHT` / `MODEL_DEEP` / `MODEL_ALERT` | 模型分层（可选）：light 跑每批的初筛评分和提及识别（关闭思考，默认 `claude-sonnet-5`）；alert 跑达到阈值后的实时深度分析和单票分析（默认 `claude-opus-5-5`，开启服务端拒答 fallback）；deep 跑日报、鬼叫、发言追踪等定时分析（默认 `claude-sonnet-5`） |
 | `SENTIMENT_BATCH_SIZE` | 每多少条消息分析一次（默认 20） |
 | `SIMPLE_ANALYSIS_MIN_ABS_SCORE` | 简单分析档下限（默认 0.5）：`>=` 进入深度分析但不调行情 |
 | `MONITOR_MIN_ABS_SCORE` | 监控档下限（默认 0.6）：`>=` 的深度分析会调取实时行情 |
