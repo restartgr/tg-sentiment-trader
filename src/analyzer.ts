@@ -1,40 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk";
-import fs from "fs";
-import path from "path";
 import { config } from "./config";
+import { loadDictionary, MentionedAsset, MentionKind } from "./asset-dictionary";
 import { buildAssetMarketContext, buildMarketContext } from "./market-data";
 import { derivePanicMetrics } from "./panic-metrics";
 import { coerceHeatDriver, HeatDriver } from "./routing";
 import { completedText, outputTokenLimit, OutputTruncatedError } from "./llm-output";
 import { isTransientModelError, runModelRequest } from "./model-request";
 
-interface AssetConfig {
-  nickname: string;
-  aliases: string[];
-  name: string;
-  ticker: string;
-  exchange: string;
-}
-
 function loadAssetHints(): string {
-  const localFile = path.join(process.cwd(), "assets.json");
-  const demoFile = path.join(process.cwd(), "assets.demo.json");
-  const file = fs.existsSync(localFile) ? localFile : demoFile;
-  if (!fs.existsSync(file)) return "";
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
-    if (!Array.isArray(parsed)) return "";
-    return (parsed as AssetConfig[])
-      .map((a) => {
-        const allNames = [a.nickname, ...a.aliases].join("/");
-        return `${allNames}=${a.name}/${a.ticker}/${a.exchange}`;
-      })
-      .join("、");
-  } catch (err) {
-    console.error(`资产提示读取失败，已跳过：${file}`, err);
-    return "";
-  }
+  return loadDictionary()
+    .map((a) => {
+      const allNames = [a.nickname, ...(a.aliases ?? [])].join("/");
+      return `${allNames}=${a.name}/${a.ticker}/${a.exchange}`;
+    })
+    .join("、");
 }
 
 // apiKey 在 config 层已用 requireEnv 强制必填，这里可无条件构造。
@@ -299,6 +278,53 @@ comment 写一句很短的中文点评，低于 30 字，说明方向与烈度�
     console.error("轻量情绪评分解析失败:", e);
     throw e;
   }
+}
+
+function coerceMentionKind(kind: unknown): MentionKind {
+  return kind === "代码" || kind === "俗称" ? kind : "正式名";
+}
+
+// 资产提及识别（light）：每批独立跑，不影响情绪评分 prompt。
+// 词典里的叫法按词典映射；词典没有的新叫法由模型凭上下文推断，交给调用方去确认。
+export async function extractMentions(
+  messages: { username: string; text: string }[],
+): Promise<MentionedAsset[]> {
+  const formatted = messages.map((m) => `@${m.username}: ${m.text}`).join("\n");
+  const system = `你是散户股票群的资产识别器。找出这批消息里提到的每个股票/指数/期货，统计提及次数。
+
+已知俗称词典（叫法=正式名称/代码/交易所）：${loadAssetHints()}
+
+规则：
+- term 必须是群里原样出现的叫法（原文里的字，不要改写成正式名）。同一资产用了不同叫法时分开列。
+- 词典里有的叫法，按词典给 name/ticker/exchange。
+- 词典里没有的叫法：只有上下文足够明确（同时提到公司名、代码、所属行业、价格或明显指代）才推断；不确定 ticker 填"未知"。
+- 日股 ticker 写 4 位代码（如 8035、285A），exchange 写"东京证券交易所"；美股写代码，exchange 写 NASDAQ 或 NYSE；指数写 Yahoo 代码如 ^N225。
+- "那个票""它""这个"等代词不算，不要猜。
+- count = 提到该叫法的消息条数。
+- evidence = 一条最能说明该叫法指代谁的原话，截短到 40 字以内。
+- kind 标注叫法类型：
+  - "代码"：叫法就是代码或带代码（如 8035、NVDA、レーザーテック<6920>）。
+  - "正式名"：公司/指数的正式名称、常用简称或官方英文/日文/中文名（如 三菱UFJ、AEON、mizuho、日经、TOPIX、东京电子、Tokyo Electron）。
+  - "俗称"：群里特有的外号、谐音、昵称、错别字变体（如 父皇、塞子、电王、镭射、乌冬）。拿不准就标"正式名"。
+- 最多列 10 个，按提及次数从多到少。没有提到任何资产就返回空数组。
+
+只返回JSON，不要其他文字。字符串值内禁止使用英文双引号：
+{"mentions":[{"term":"...","kind":"代码|正式名|俗称","name":"...","ticker":"...","exchange":"...","count":1,"evidence":"..."}]}`;
+
+  const raw = await chat(system, `以下是 ${messages.length} 条群消息：\n\n${formatted}`, 4000, "light");
+  const json = parseJSON(raw);
+  const list = Array.isArray(json.mentions) ? json.mentions : [];
+  return list
+    .map((m: any) => ({
+      term: String(m.term ?? "").trim(),
+      kind: coerceMentionKind(m.kind),
+      name: String(m.name ?? "").trim(),
+      ticker: String(m.ticker ?? "未知").trim() || "未知",
+      exchange: String(m.exchange ?? "").trim(),
+      count: Math.max(1, Number.parseInt(String(m.count ?? 1), 10) || 1),
+      evidence: String(m.evidence ?? "").trim().slice(0, 80),
+    }))
+    .filter((m: MentionedAsset) => m.term.length > 0);
 }
 
 // 简单分析档使用：不调行情时注入此上下文，约束模型不要编造任何价位。

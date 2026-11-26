@@ -1,5 +1,4 @@
-import fs from "fs";
-import path from "path";
+import { loadDictionary } from "./asset-dictionary";
 
 export interface AssetConfig {
   nickname: string;
@@ -9,7 +8,7 @@ export interface AssetConfig {
   exchange: string;
 }
 
-interface MarketQuote {
+export interface MarketQuote {
   symbol: string;
   name: string;
   price: number;
@@ -44,21 +43,10 @@ const chartCache = new Map<string, { expiresAt: number; value: ChartBar[] }>();
 const newsCache = new Map<string, { expiresAt: number; value: NewsItem[] }>();
 
 function loadAssets(): AssetConfig[] {
-  const localFile = path.join(process.cwd(), "assets.json");
-  const demoFile = path.join(process.cwd(), "assets.demo.json");
-  const file = fs.existsSync(localFile) ? localFile : demoFile;
-  if (!fs.existsSync(file)) return [];
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
-    return Array.isArray(parsed) ? parsed as AssetConfig[] : [];
-  } catch (err) {
-    console.error(`资产映射读取失败，已跳过：${file}`, err);
-    return [];
-  }
+  return loadDictionary();
 }
 
-function toYahooSymbol(asset: Pick<AssetConfig, "ticker" | "exchange">): string | null {
+export function toYahooSymbol(asset: Pick<AssetConfig, "ticker" | "exchange">): string | null {
   if (!asset.ticker || asset.ticker === "未知") return null;
 
   const ticker = asset.ticker.trim().toUpperCase();
@@ -193,7 +181,7 @@ function buildOrbSnapshot(intradayBars: ChartBar[], currentPrice?: number): stri
   return `ORB：首30分钟区间 高 ${formatLevel(orbHigh)} / 低 ${formatLevel(orbLow)}，当前${status}`;
 }
 
-async function fetchYahooQuote(symbol: string): Promise<MarketQuote | null> {
+export async function fetchYahooQuote(symbol: string): Promise<MarketQuote | null> {
   const cached = quoteCache.get(symbol);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
