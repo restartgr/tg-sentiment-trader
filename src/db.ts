@@ -189,10 +189,14 @@ export function initDatabase(dbFile = process.env.TG_DB_FILE ?? DEFAULT_DB_FILE)
   `);
 
   // 迁移：asset_aliases.notified_at 记录最近一次推送确认消息的时间，用于重推过期候选。
-  const aliasColumns = database.prepare("PRAGMA table_info(asset_aliases)").all() as { name: string }[];
-  if (!aliasColumns.some((c) => c.name === "notified_at")) {
-    database.exec("ALTER TABLE asset_aliases ADD COLUMN notified_at TEXT");
-  }
+  // 监听和 Dashboard 可能同时启动，用 IMMEDIATE 事务串行化「检查列 + 加列」。
+  const db = database;
+  db.transaction(() => {
+    const aliasColumns = db.prepare("PRAGMA table_info(asset_aliases)").all() as { name: string }[];
+    if (!aliasColumns.some((c) => c.name === "notified_at")) {
+      db.exec("ALTER TABLE asset_aliases ADD COLUMN notified_at TEXT");
+    }
+  }).immediate();
 
   return database;
 }

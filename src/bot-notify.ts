@@ -72,12 +72,15 @@ export interface CallbackQuery {
 }
 
 // 长轮询接收按钮回调。只处理来自 ownerId 的点击，其他人点了直接忽略。
+// onBacklogDrained：启动时积压的点击全部处理完后调用一次。
 export function startCallbackPoller(
   target: BotTarget,
   ownerId: string,
   handle: (query: CallbackQuery) => Promise<string>,
+  options: { onBacklogDrained?: () => void } = {},
 ): void {
   let offset = 0;
+  let drained = false;
   const loop = async () => {
     for (;;) {
       try {
@@ -87,6 +90,11 @@ export function startCallbackPoller(
           { offset, timeout: 30, allowed_updates: ["callback_query"] },
           40_000,
         );
+        // 第一次拿到空结果说明启动前攒下的点击都已处理完。
+        if (updates.length === 0 && !drained) {
+          drained = true;
+          options.onBacklogDrained?.();
+        }
         for (const u of updates) {
           offset = u.update_id + 1;
           const q = u.callback_query;

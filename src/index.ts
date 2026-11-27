@@ -306,15 +306,19 @@ async function main() {
   );
   if (alertBot) {
     // 接收黑话确认按钮；只认你自己的点击。
-    startCallbackPoller(alertBot, config.telegram.myUserId.toString(), async (q) => {
-      return (await handleAliasCallback(q)) ?? "未知操作";
-    });
-    // 等一分钟让轮询先把 Telegram 里攒下的点击处理完，再重发已过期的候选。
-    setTimeout(() => {
-      void resendStalePendingAliases(alertBot, groupLabels).catch((err) =>
-        console.error("重发黑话候选失败:", err),
-      );
-    }, 60_000);
+    // 先把 Telegram 里攒下的点击处理完，再重发已过期的候选，避免重复推送已点过的。
+    startCallbackPoller(
+      alertBot,
+      config.telegram.myUserId.toString(),
+      async (q) => (await handleAliasCallback(q)) ?? "未知操作",
+      {
+        onBacklogDrained: () => {
+          void resendStalePendingAliases(alertBot, groupLabels).catch((err) =>
+            console.error("重发黑话候选失败:", err),
+          );
+        },
+      },
+    );
   }
   const alertThresholds = {
     minAbsScore: config.sentiment.alertMinAbsScore,
