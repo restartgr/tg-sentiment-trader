@@ -9,7 +9,13 @@ import {
   normalizeTerm,
 } from "./asset-dictionary";
 import { BotTarget, CallbackQuery, sendViaBot } from "./bot-notify";
-import { decideAlias, insertAliasCandidate, listAliases } from "./db";
+import {
+  decideAlias,
+  insertAliasCandidate,
+  listAliases,
+  listStalePendingAliases,
+  markAliasNotified,
+} from "./db";
 import { fetchYahooQuote, toYahooSymbol } from "./market-data";
 import { aliasCallbackData, formatAliasCandidate, parseAliasCallback } from "./alias-format";
 
@@ -49,15 +55,40 @@ export async function learnAliasesFromMentions(params: {
 
     console.log(`🆕 新黑话候选 #${id}「${m.term}」→ ${m.name} ${m.ticker}`);
     if (!bot) continue;
-    await sendViaBot(bot, formatAliasCandidate(m, quote, groupLabel), {
-      silent: true,
-      buttons: [
-        [
-          { text: "✅ 对，加入词典", callback_data: aliasCallbackData("ok", id) },
-          { text: "❌ 不对", callback_data: aliasCallbackData("no", id) },
-        ],
+    await sendAliasPrompt(bot, id, formatAliasCandidate(m, quote, groupLabel));
+  }
+}
+
+async function sendAliasPrompt(bot: BotTarget, id: number, text: string): Promise<void> {
+  await sendViaBot(bot, text, {
+    silent: true,
+    buttons: [
+      [
+        { text: "✅ 对，加入词典", callback_data: aliasCallbackData("ok", id) },
+        { text: "❌ 不对", callback_data: aliasCallbackData("no", id) },
       ],
+    ],
+  });
+  markAliasNotified(id);
+}
+
+// 按钮回调只在监听进程运行时处理；启动时 Telegram 会把 24 小时内攒下的点击补发过来。
+// 超过 24 小时的点击（典型是周末）已丢失，这里把仍未决定的候选重新推一次。
+export async function resendStalePendingAliases(
+  bot: BotTarget,
+  groupLabels: Map<string, string>,
+): Promise<void> {
+  for (const alias of listStalePendingAliases(24)) {
+    const quote = await fetchYahooQuote(alias.yahooSymbol);
+    if (!quote) {
+      console.log(`🔎 重发黑话候选 #${alias.id}「${alias.term}」时 Yahoo 查不到，下次再试`);
+      continue;
+    }
+    const text = formatAliasCandidate(alias, quote, groupLabels.get(alias.groupId) ?? alias.groupId, {
+      resend: true,
     });
+    await sendAliasPrompt(bot, alias.id, text);
+    console.log(`🔁 重发黑话候选 #${alias.id}「${alias.term}」`);
   }
 }
 

@@ -188,6 +188,12 @@ export function initDatabase(dbFile = process.env.TG_DB_FILE ?? DEFAULT_DB_FILE)
       ON alert_outcomes(ret_5d, alert_ts);
   `);
 
+  // 迁移：asset_aliases.notified_at 记录最近一次推送确认消息的时间，用于重推过期候选。
+  const aliasColumns = database.prepare("PRAGMA table_info(asset_aliases)").all() as { name: string }[];
+  if (!aliasColumns.some((c) => c.name === "notified_at")) {
+    database.exec("ALTER TABLE asset_aliases ADD COLUMN notified_at TEXT");
+  }
+
   return database;
 }
 
@@ -566,6 +572,26 @@ export function listAliases(status?: AliasStatus): StoredAlias[] {
     ? db.prepare("SELECT * FROM asset_aliases WHERE status = ? ORDER BY id").all(status)
     : db.prepare("SELECT * FROM asset_aliases ORDER BY id").all();
   return rows.map(rowToAlias);
+}
+
+export function markAliasNotified(id: number): void {
+  getDatabase()
+    .prepare("UPDATE asset_aliases SET notified_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .run(id);
+}
+
+// 仍是 pending、且上次推送已超过 hours 小时的候选。Telegram 只保留 24 小时内的按钮点击，
+// 超时的点击已经丢了，需要重新推一条带按钮的消息。
+export function listStalePendingAliases(hours = 24): StoredAlias[] {
+  return getDatabase()
+    .prepare(
+      `SELECT * FROM asset_aliases
+       WHERE status = 'pending'
+         AND COALESCE(notified_at, created_at) <= datetime('now', ?)
+       ORDER BY id`,
+    )
+    .all(`-${hours} hours`)
+    .map(rowToAlias);
 }
 
 // 只允许 pending → confirmed/rejected，重复点按钮不会改写已做的决定。

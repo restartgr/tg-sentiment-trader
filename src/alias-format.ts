@@ -15,17 +15,18 @@ export function parseAliasCallback(
 }
 
 export function formatAliasCandidate(
-  m: Pick<MentionedAsset, "term" | "name" | "ticker" | "exchange" | "count" | "evidence">,
+  m: Pick<MentionedAsset, "term" | "name" | "ticker" | "exchange" | "evidence"> & { count?: number },
   yahoo: { symbol: string; name: string; price: number; currency: string },
   groupLabel: string,
+  options: { resend?: boolean } = {},
 ): string {
   return [
-    `🆕 新黑话待确认`,
+    options.resend ? `🔁 新黑话待确认（重发：之前的按钮已过期）` : `🆕 新黑话待确认`,
     ``,
     `「${m.term}」→ ${m.name} ${m.ticker}（${m.exchange}）`,
     `📈 Yahoo：${yahoo.name} ${yahoo.symbol} 现价 ${yahoo.price} ${yahoo.currency}`,
     `💬 原话：${m.evidence || "（无）"}`,
-    `📍 ${groupLabel}，本批提到 ${m.count} 次`,
+    m.count === undefined ? `📍 ${groupLabel}` : `📍 ${groupLabel}，本批提到 ${m.count} 次`,
   ].join("\n");
 }
 

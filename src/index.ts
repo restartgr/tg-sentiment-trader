@@ -30,7 +30,7 @@ import {
 import { runUserReport } from "./user-report";
 import { decideAlert, LastAlert } from "./alert-gate";
 import { BotTarget, sendAlert, startCallbackPoller } from "./bot-notify";
-import { handleAliasCallback } from "./alias-learning";
+import { handleAliasCallback, resendStalePendingAliases } from "./alias-learning";
 import {
   buildMarketCheck,
   evaluatePendingOutcomes,
@@ -309,6 +309,12 @@ async function main() {
     startCallbackPoller(alertBot, config.telegram.myUserId.toString(), async (q) => {
       return (await handleAliasCallback(q)) ?? "未知操作";
     });
+    // 等一分钟让轮询先把 Telegram 里攒下的点击处理完，再重发已过期的候选。
+    setTimeout(() => {
+      void resendStalePendingAliases(alertBot, groupLabels).catch((err) =>
+        console.error("重发黑话候选失败:", err),
+      );
+    }, 60_000);
   }
   const alertThresholds = {
     minAbsScore: config.sentiment.alertMinAbsScore,

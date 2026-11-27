@@ -1,9 +1,14 @@
 // 实时告警出口：配置了 TELEGRAM_BOT_TOKEN 就用自建 bot 私聊推给自己（手机会响），
 // 否则退回「已保存消息」。两者都只发给自己，不会进任何群。
+import net from "node:net";
 import { TelegramClient } from "telegram";
 import { sendToSavedMessages } from "./telegram-utils";
 
 const TG_MESSAGE_LIMIT = 4096;
+
+// Node 默认 happy eyeballs 每个地址只给 250ms 建连；服务器没有 IPv6、到 api.telegram.org
+// 的 IPv4 握手偶尔超过 250ms，就会报 "fetch failed (ETIMEDOUT)"。放宽到 2 秒。
+net.setDefaultAutoSelectFamilyAttemptTimeout(2000);
 
 export interface BotTarget {
   token: string;
