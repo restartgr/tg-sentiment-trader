@@ -21,7 +21,7 @@ export function formatAliasCandidate(
   options: { resend?: boolean } = {},
 ): string {
   return [
-    options.resend ? `🔁 新黑话待确认（重发：之前的按钮已过期）` : `🆕 新黑话待确认`,
+    options.resend ? `🔁 新黑话待确认（重发：之前的点击没收到，请重新确认）` : `🆕 新黑话待确认`,
     ``,
     `「${m.term}」→ ${m.name} ${m.ticker}（${m.exchange}）`,
     yahoo.price == null

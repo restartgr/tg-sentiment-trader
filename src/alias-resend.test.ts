@@ -41,10 +41,10 @@ test("listStalePendingAliases 只返回超过 24 小时未决定的候选，重�
   closeDatabase();
 });
 
-test("formatAliasCandidate 重发时标题提示按钮已过期，且不显示本批次数", () => {
+test("formatAliasCandidate 重发时标题提示重新确认，且不显示本批次数", () => {
   const quote = { symbol: "285A.T", name: "KIOXIA", price: 7762, currency: "JPY" };
   const text = formatAliasCandidate(candidate("凯侠"), quote, "谈股论今", { resend: true });
-  assert.match(text, /^🔁 新黑话待确认（重发：之前的按钮已过期）/);
+  assert.match(text, /^🔁 新黑话待确认（重发：之前的点击没收到，请重新确认）/);
   assert.match(text, /📍 谈股论今$/);
   assert.match(formatAliasCandidate({ ...candidate("凯侠"), count: 2 }, quote, "谈股论今"), /本批提到 2 次/);
   assert.match(
