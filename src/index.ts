@@ -30,7 +30,7 @@ import {
 import { runUserReport } from "./user-report";
 import { decideAlert, LastAlert } from "./alert-gate";
 import { BotTarget, sendAlert, startCallbackPoller } from "./bot-notify";
-import { handleAliasCallback } from "./alias-learning";
+import { handleAliasCallback, resendStalePendingAliases } from "./alias-learning";
 import {
   buildMarketCheck,
   evaluatePendingOutcomes,
@@ -306,9 +306,19 @@ async function main() {
   );
   if (alertBot) {
     // 接收黑话确认按钮；只认你自己的点击。
-    startCallbackPoller(alertBot, config.telegram.myUserId.toString(), async (q) => {
-      return (await handleAliasCallback(q)) ?? "未知操作";
-    });
+    // 先把 Telegram 里攒下的点击处理完，再重发已过期的候选，避免重复推送已点过的。
+    startCallbackPoller(
+      alertBot,
+      config.telegram.myUserId.toString(),
+      async (q) => (await handleAliasCallback(q)) ?? "未知操作",
+      {
+        onBacklogDrained: () => {
+          void resendStalePendingAliases(alertBot, groupLabels).catch((err) =>
+            console.error("重发黑话候选失败:", err),
+          );
+        },
+      },
+    );
   }
   const alertThresholds = {
     minAbsScore: config.sentiment.alertMinAbsScore,

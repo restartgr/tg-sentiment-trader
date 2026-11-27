@@ -1,9 +1,14 @@
 // 实时告警出口：配置了 TELEGRAM_BOT_TOKEN 就用自建 bot 私聊推给自己（手机会响），
 // 否则退回「已保存消息」。两者都只发给自己，不会进任何群。
+import net from "node:net";
 import { TelegramClient } from "telegram";
 import { sendToSavedMessages } from "./telegram-utils";
 
 const TG_MESSAGE_LIMIT = 4096;
+
+// Node 默认 happy eyeballs 每个地址只给 250ms 建连；服务器没有 IPv6、到 api.telegram.org
+// 的 IPv4 握手偶尔超过 250ms，就会报 "fetch failed (ETIMEDOUT)"。放宽到 2 秒。
+net.setDefaultAutoSelectFamilyAttemptTimeout(2000);
 
 export interface BotTarget {
   token: string;
@@ -67,12 +72,15 @@ export interface CallbackQuery {
 }
 
 // 长轮询接收按钮回调。只处理来自 ownerId 的点击，其他人点了直接忽略。
+// onBacklogDrained：启动时积压的点击全部处理完后调用一次。
 export function startCallbackPoller(
   target: BotTarget,
   ownerId: string,
   handle: (query: CallbackQuery) => Promise<string>,
+  options: { onBacklogDrained?: () => void } = {},
 ): void {
   let offset = 0;
+  let drained = false;
   const loop = async () => {
     for (;;) {
       try {
@@ -82,6 +90,11 @@ export function startCallbackPoller(
           { offset, timeout: 30, allowed_updates: ["callback_query"] },
           40_000,
         );
+        // 第一次拿到空结果说明启动前攒下的点击都已处理完。
+        if (updates.length === 0 && !drained) {
+          drained = true;
+          options.onBacklogDrained?.();
+        }
         for (const u of updates) {
           offset = u.update_id + 1;
           const q = u.callback_query;
