@@ -16,7 +16,7 @@ export function parseAliasCallback(
 
 export function formatAliasCandidate(
   m: Pick<MentionedAsset, "term" | "name" | "ticker" | "exchange" | "evidence"> & { count?: number },
-  yahoo: { symbol: string; name: string; price: number; currency: string },
+  yahoo: { symbol: string; name: string; price?: number | null; currency?: string },
   groupLabel: string,
   options: { resend?: boolean } = {},
 ): string {
@@ -24,7 +24,9 @@ export function formatAliasCandidate(
     options.resend ? `🔁 新黑话待确认（重发：之前的按钮已过期）` : `🆕 新黑话待确认`,
     ``,
     `「${m.term}」→ ${m.name} ${m.ticker}（${m.exchange}）`,
-    `📈 Yahoo：${yahoo.name} ${yahoo.symbol} 现价 ${yahoo.price} ${yahoo.currency}`,
+    yahoo.price == null
+      ? `📈 Yahoo：${yahoo.name} ${yahoo.symbol}（现价暂缺）`
+      : `📈 Yahoo：${yahoo.name} ${yahoo.symbol} 现价 ${yahoo.price} ${yahoo.currency ?? ""}`.trimEnd(),
     `💬 原话：${m.evidence || "（无）"}`,
     m.count === undefined ? `📍 ${groupLabel}` : `📍 ${groupLabel}，本批提到 ${m.count} 次`,
   ].join("\n");

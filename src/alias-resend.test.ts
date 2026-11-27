@@ -47,4 +47,8 @@ test("formatAliasCandidate 重发时标题提示按钮已过期，且不显示�
   assert.match(text, /^🔁 新黑话待确认（重发：之前的按钮已过期）/);
   assert.match(text, /📍 谈股论今$/);
   assert.match(formatAliasCandidate({ ...candidate("凯侠"), count: 2 }, quote, "谈股论今"), /本批提到 2 次/);
+  assert.match(
+    formatAliasCandidate(candidate("凯侠"), { symbol: "285A.T", name: "KIOXIA" }, "谈股论今", { resend: true }),
+    /📈 Yahoo：KIOXIA 285A\.T（现价暂缺）/,
+  );
 });

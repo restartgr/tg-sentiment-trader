@@ -11,6 +11,7 @@ import {
 import { BotTarget, CallbackQuery, sendViaBot } from "./bot-notify";
 import {
   decideAlias,
+  getAlias,
   insertAliasCandidate,
   listAliases,
   listStalePendingAliases,
@@ -79,16 +80,23 @@ export async function resendStalePendingAliases(
   groupLabels: Map<string, string>,
 ): Promise<void> {
   for (const alias of listStalePendingAliases(24)) {
-    const quote = await fetchYahooQuote(alias.yahooSymbol);
-    if (!quote) {
-      console.log(`🔎 重发黑话候选 #${alias.id}「${alias.term}」时 Yahoo 查不到，下次再试`);
-      continue;
+    try {
+      // 报价只是参考信息，查不到时用入库时验证过的代码和名称照常重发，不让 Yahoo 故障卡住确认。
+      const quote = await fetchYahooQuote(alias.yahooSymbol).catch(() => null);
+      // 等报价期间按钮回调可能已经处理了这条，发送前再确认一次仍是 pending。
+      if (getAlias(alias.id)?.status !== "pending") continue;
+      const text = formatAliasCandidate(
+        alias,
+        quote ?? { symbol: alias.yahooSymbol, name: alias.yahooName },
+        groupLabels.get(alias.groupId) ?? alias.groupId,
+        { resend: true },
+      );
+      await sendAliasPrompt(bot, alias.id, text);
+      console.log(`🔁 重发黑话候选 #${alias.id}「${alias.term}」`);
+    } catch (err) {
+      // 单条失败不影响其余候选；notified_at 不更新，下次启动会再试。
+      console.error(`重发黑话候选 #${alias.id}「${alias.term}」失败:`, err);
     }
-    const text = formatAliasCandidate(alias, quote, groupLabels.get(alias.groupId) ?? alias.groupId, {
-      resend: true,
-    });
-    await sendAliasPrompt(bot, alias.id, text);
-    console.log(`🔁 重发黑话候选 #${alias.id}「${alias.term}」`);
   }
 }
 

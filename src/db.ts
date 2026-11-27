@@ -574,6 +574,11 @@ export function listAliases(status?: AliasStatus): StoredAlias[] {
   return rows.map(rowToAlias);
 }
 
+export function getAlias(id: number): StoredAlias | null {
+  const row = getDatabase().prepare("SELECT * FROM asset_aliases WHERE id = ?").get(id);
+  return row ? rowToAlias(row) : null;
+}
+
 export function markAliasNotified(id: number): void {
   getDatabase()
     .prepare("UPDATE asset_aliases SET notified_at = CURRENT_TIMESTAMP WHERE id = ?")
