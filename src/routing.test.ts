@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import {
   coerceHeatDriver,
   decideDeepOutcome,
+  decideSignalStance,
   emotionIntensity,
   isHeatTriggered,
   isScoreTriggered,
   marketAllowedThisRound,
+  scoreLabel,
   shouldDeepAnalyze,
   triggerReason,
 } from "./routing";
@@ -131,6 +133,51 @@ check("decideDeepOutcome：score 触发但方向回落 → downgraded", () => {
 check("emotionIntensity 取方向与烈度的大者", () => {
   assert.equal(emotionIntensity(-0.3, 0.7), 0.7);
   assert.equal(emotionIntensity(-0.8, 0.2), 0.8);
+});
+
+// label 由 score 推导：与 prompt 档位表一致，含边界值。
+check("scoreLabel 档位映射与边界", () => {
+  assert.equal(scoreLabel(0.9), "极度乐观");
+  assert.equal(scoreLabel(0.65), "极度乐观");
+  assert.equal(scoreLabel(0.5), "乐观");
+  assert.equal(scoreLabel(0.2), "乐观");
+  assert.equal(scoreLabel(0.19), "中性");
+  assert.equal(scoreLabel(0), "中性");
+  assert.equal(scoreLabel(-0.19), "中性");
+  assert.equal(scoreLabel(-0.2), "悲观");
+  assert.equal(scoreLabel(-0.64), "悲观");
+  assert.equal(scoreLabel(-0.65), "极度悲观");
+  assert.equal(scoreLabel(-1), "极度悲观");
+});
+
+// signal 操作框架由程序查表，模型只填理由与条件。
+check("decideSignalStance 决策表", () => {
+  const t = { scoreMin: SCORE_MIN, heatHigh: HEAT_DEEP };
+  // 烈度来源不明 → 一律观望（与行情无关的情绪不给方向）
+  assert.equal(
+    decideSignalStance({ score: 0.9, heat: 0.9, heatDriver: "其他或不明", ...t }),
+    "观望",
+  );
+  // 高烈度 + 方向明确 → 反向（情绪过热，易反转）
+  assert.equal(
+    decideSignalStance({ score: -0.7, heat: 0.8, heatDriver: "下跌", ...t }),
+    "反向",
+  );
+  // 高烈度 + 方向未定 → 观望（不顺势追）
+  assert.equal(
+    decideSignalStance({ score: 0.1, heat: 0.8, heatDriver: "多空分歧", ...t }),
+    "观望",
+  );
+  // 低烈度 + 方向明确 → 跟随
+  assert.equal(
+    decideSignalStance({ score: 0.6, heat: 0.3, heatDriver: "上涨", ...t }),
+    "跟随",
+  );
+  // 低烈度 + 中性 → 观望
+  assert.equal(
+    decideSignalStance({ score: 0.2, heat: 0.3, heatDriver: "上涨", ...t }),
+    "观望",
+  );
 });
 
 console.log(`\n全部 ${passed} 组用例通过`);

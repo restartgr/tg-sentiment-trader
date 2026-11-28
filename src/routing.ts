@@ -6,6 +6,41 @@
 
 export type HeatDriver = "上涨" | "下跌" | "多空分歧" | "其他或不明";
 
+export type SentimentLabel = "极度悲观" | "悲观" | "中性" | "乐观" | "极度乐观";
+
+// label 由 score 推导，不再让模型输出：评分档位表就在 prompt 里，
+// 模型另给 label 只会制造 score 与 label 不一致的读数。
+export function scoreLabel(score: number): SentimentLabel {
+  if (score >= 0.65) return "极度乐观";
+  if (score >= 0.2) return "乐观";
+  if (score > -0.2) return "中性";
+  if (score > -0.65) return "悲观";
+  return "极度悲观";
+}
+
+export type SignalStance = "跟随" | "反向" | "观望";
+
+// 操作框架（跟随/反向/观望）由程序查表决定，模型只负责理由与每资产条件文本。
+// 与 prompt 决策表一致：
+// - heatDriver 其他或不明 → 观望（与行情无关或来源不明，不给方向）；
+// - 高烈度 + 方向明确 → 反向（情绪过热，易反转）；
+// - 高烈度 + 方向未定 → 观望（方向未明朗，不顺势追）；
+// - 低烈度 + 方向明确 → 跟随（节奏平缓、情绪有方向才考虑跟随）；
+// - 低烈度 + 中性 → 观望。
+export function decideSignalStance(params: {
+  score: number;
+  heat: number;
+  heatDriver: HeatDriver;
+  scoreMin: number;
+  heatHigh: number;
+}): SignalStance {
+  if (params.heatDriver === "其他或不明") return "观望";
+  const directional = Math.abs(params.score) >= params.scoreMin;
+  const hot = params.heat >= params.heatHigh;
+  if (hot) return directional ? "反向" : "观望";
+  return directional ? "跟随" : "观望";
+}
+
 export const DEFAULT_ROUTING_THRESHOLDS = {
   scoreMin: 0.5,
   heatDeepMin: 0.6,

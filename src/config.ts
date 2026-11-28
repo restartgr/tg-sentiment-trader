@@ -40,8 +40,6 @@ export const config = {
     apiHash: requireEnv("TG_API_HASH"),
     // 要监控的群组 username 或 invite link（支持多个）
     targetGroups: parseList(requireEnv("TG_TARGET_GROUPS")),
-    // 要监控的群友 username（不含@，支持多个）
-    targetUsers: parseList(process.env.TG_TARGET_USERS ?? ""),
     // 你自己的 Telegram user ID（用于接收提醒）
     myUserId: parseIntEnv("TG_MY_USER_ID"),
     bombTarget: process.env.TG_BOMB_TARGET ?? "",
@@ -63,13 +61,6 @@ export const config = {
     modelDeep: process.env.MODEL_DEEP ?? "claude-sonnet-5",
     // 实时告警的深度分析与单票分析：触发少、最需要判断力，默认用 Opus 5.5。
     modelAlert: process.env.MODEL_ALERT ?? "claude-opus-5-5",
-  },
-  keywords: {
-    // 包含这些词就触发 AI 分析（不区分买卖，由 AI 判断）
-    triggers: parseList(
-      process.env.TRIGGER_KEYWORDS ??
-        "大G,大g,梭哈,all.?in,全仓,割肉,跑路,爆仓,归零,上车,清仓",
-    ),
   },
   report: {
     // 今日综合总结固定观察的大盘标的，直接使用 Yahoo Finance symbol。
