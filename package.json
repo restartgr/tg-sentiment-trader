@@ -29,7 +29,7 @@
     "outcomes": "tsx src/outcomes-report.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
+    "@anthropic-ai/sdk": "^1.14.0",
     "@hono/node-server": "^2.1.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^12.11.1",

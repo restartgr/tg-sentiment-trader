@@ -1,7 +1,7 @@
 // 行情交叉验证的 I/O 层：拉外部指标、拼告警附加行、提及量流水线、记录与回填事后验证。
 import { TelegramClient } from "telegram";
 import { config } from "./config";
-import { extractMentions } from "./analyzer";
+import { MentionedAsset } from "./asset-dictionary";
 import { learnAliasesFromMentions } from "./alias-learning";
 import { BotTarget, sendAlert } from "./bot-notify";
 import {
@@ -132,16 +132,17 @@ export async function recordSentimentOutcome(params: {
 
 const lastSpikeAlerts = new Map<string, { at: number; count: number }>();
 
-// 每批一次：识别提及 → 落库 → 学黑话 → 查提及量异动。
+// 每批一次：提及落库 → 学黑话 → 查提及量异动。
+// mentions 由调用方识别后传入：同一批消息的识别结果也会注入深度分析，两边不再各识别一遍。
 export async function runMentionPipeline(params: {
   client: TelegramClient;
   bot: BotTarget | null;
   groupId: string;
   groupLabel: string;
   messages: { username: string; text: string; messageTs: number }[];
+  mentions: MentionedAsset[];
 }): Promise<void> {
-  const { client, bot, groupId, groupLabel, messages } = params;
-  const mentions = await extractMentions(messages);
+  const { client, bot, groupId, groupLabel, messages, mentions } = params;
   const ts = Math.max(...messages.map((m) => m.messageTs));
 
   // 同一 symbol 的多种叫法合并计数。

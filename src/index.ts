@@ -16,8 +16,10 @@ import {
   BatchAnalysisResult,
   BatchScoreResult,
   buildBatchMarketContext,
+  extractMentions,
   NO_MARKET_CONTEXT,
 } from "./analyzer";
+import { MentionedAsset } from "./asset-dictionary";
 import {
   createTelegramClient,
   getSenderName,
@@ -39,6 +41,7 @@ import {
 } from "./signals-io";
 import {
   decideDeepOutcome,
+  decideSignalStance,
   heatDriverEmoji,
   heatDriverHeadline,
   isHeatTriggered,
@@ -339,14 +342,26 @@ async function main() {
 
     const paceNote = describePace(buffer);
 
-    // 提及识别（黑话学习 + 提及量异动）与情绪分析并行、互不影响：失败只记日志。
-    void runMentionPipeline({
-      client,
-      bot: alertBot,
-      groupId,
-      groupLabel: groupLabels.get(groupId) ?? groupId,
-      messages: buffer,
-    }).catch((err) => console.error("提及识别流水线失败:", err));
+    // 提及识别只跑一次：结果既给黑话学习/提及量异动，也注入深度分析做资产确认。
+    // 识别失败不拦截情绪分析，降级为空候选。
+    const mentionsPromise: Promise<MentionedAsset[]> = extractMentions(buffer).catch(
+      (err) => {
+        console.error("资产提及识别失败:", err);
+        return [];
+      },
+    );
+    void mentionsPromise
+      .then((mentions) =>
+        runMentionPipeline({
+          client,
+          bot: alertBot,
+          groupId,
+          groupLabel: groupLabels.get(groupId) ?? groupId,
+          messages: buffer,
+          mentions,
+        }),
+      )
+      .catch((err) => console.error("提及识别流水线失败:", err));
 
     try {
       const quick = await analyzeBatchScore(buffer, paceNote);
@@ -438,7 +453,20 @@ async function main() {
       const marketContext = pullMarket
         ? await buildBatchMarketContext(buffer)
         : NO_MARKET_CONTEXT;
-      const result = await analyzeBatch(buffer, marketContext, paceNote);
+      // signal 的操作框架（跟随/反向/观望）由程序按初筛读数查表决定，
+      // 模型只负责理由与每资产条件，不再自己选方向。
+      const stance = decideSignalStance({
+        score: quick.score,
+        heat: quick.heat,
+        heatDriver: quick.heatDriver,
+        scoreMin: config.sentiment.simpleAnalysisMinAbsScore,
+        heatHigh: config.sentiment.heatDeepThreshold,
+      });
+      const mentions = await mentionsPromise;
+      const result = await analyzeBatch(buffer, marketContext, paceNote, {
+        mentions,
+        stance,
+      });
 
       // 交易档位由深度轮方向轴复核决定；heat 不能把它抬进交易档。
       const directionRule = resolveEffectiveDirectionTier(

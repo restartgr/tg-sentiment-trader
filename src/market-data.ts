@@ -62,24 +62,36 @@ export function toYahooSymbol(asset: Pick<AssetConfig, "ticker" | "exchange">): 
   return ticker;
 }
 
-function containsAsset(text: string, asset: AssetConfig): boolean {
-  const terms = [asset.nickname, asset.name, asset.ticker, ...asset.aliases]
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// 短英文叫法（ES、NQ 等）必须按整词匹配：纯子串会命中 "yes"、"esg" 里的 es。
+function termPattern(term: string): RegExp {
+  const escaped = escapeRegExp(term.toLowerCase());
+  if (/^[\x20-\x7e]+$/.test(term) && term.length <= 3) {
+    return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`, "g");
+  }
+  return new RegExp(escaped, "g");
+}
+
+function assetTerms(asset: AssetConfig): string[] {
+  return [asset.nickname, asset.name, asset.ticker, ...asset.aliases]
     .map((term) => term.trim())
     .filter(Boolean);
+}
 
-  return terms.some((term) => text.toLowerCase().includes(term.toLowerCase()));
+function containsAsset(text: string, asset: AssetConfig): boolean {
+  const lowerText = text.toLowerCase();
+  return assetTerms(asset).some((term) => termPattern(term).test(lowerText));
 }
 
 function countAssetMentions(text: string, asset: AssetConfig): number {
-  const terms = [asset.nickname, asset.name, asset.ticker, ...asset.aliases]
-    .map((term) => term.trim())
-    .filter(Boolean);
   const lowerText = text.toLowerCase();
-
-  return terms.reduce((count, term) => {
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return count + (lowerText.match(new RegExp(escaped.toLowerCase(), "g"))?.length ?? 0);
-  }, 0);
+  return assetTerms(asset).reduce(
+    (count, term) => count + (lowerText.match(termPattern(term))?.length ?? 0),
+    0,
+  );
 }
 
 function formatAssetContext(

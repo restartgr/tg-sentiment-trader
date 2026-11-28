@@ -72,6 +72,22 @@ export function mergeConfirmedAliases(
   return merged;
 }
 
+// 内置通用条目：跨群通用的期货/俗称叫法，原先硬编码在分析 prompt 里。
+// assets.json 里出现同一标的时以文件为准；群特有黑话请走 assets.json 或确认流程入库。
+const BUILTIN_ASSETS: AssetEntry[] = [
+  { nickname: "ES", aliases: ["标普期货"], name: "标普500期货", ticker: "ES", exchange: "CME期货" },
+  { nickname: "NQ", aliases: ["纳指期货"], name: "纳斯达克100期货", ticker: "NQ", exchange: "CME期货" },
+  { nickname: "药哥", aliases: [], name: "辉瑞", ticker: "PFE", exchange: "NYSE" },
+];
+
+function withBuiltinAssets(fileAssets: AssetEntry[]): AssetEntry[] {
+  const merged = [...fileAssets];
+  for (const builtin of BUILTIN_ASSETS) {
+    if (!merged.some((a) => sameAsset(a, builtin))) merged.push(builtin);
+  }
+  return merged;
+}
+
 export function loadDictionary(): AssetEntry[] {
   let confirmed: StoredAlias[] = [];
   try {
@@ -79,7 +95,7 @@ export function loadDictionary(): AssetEntry[] {
   } catch (err) {
     console.error("读取已确认黑话失败，仅使用 assets.json:", err);
   }
-  return mergeConfirmedAliases(readFileAssets(), confirmed);
+  return mergeConfirmedAliases(withBuiltinAssets(readFileAssets()), confirmed);
 }
 
 export function dictionaryTerms(dictionary: AssetEntry[]): Set<string> {
